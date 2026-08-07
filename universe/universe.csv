@@ -1,51 +1,51 @@
 Ticker,Company,Sector,Market Cap,Notes
-RELIANCE,Reliance Industries,Energy,1980000,Conglomerate - energy/retail/telecom. High institutional ownership.
-HDFCBANK,HDFC Bank,Banking,1260000,Largest private bank. Consistent compounder.
-TCS,Tata Consultancy Services,IT,1460000,Largest IT services. High cash generation.
-ICICIBANK,ICICI Bank,Banking,950000,Strong retail and corporate franchise. Improving RoA.
-INFY,Infosys,IT,740000,Tier-1 IT. Steady dividend payer.
-BHARTIARTL,Bharti Airtel,Telecom,980000,Duopoly telecom. ARPU expansion story.
-HCLTECH,HCL Technologies,IT,420000,Strong in infra services and products.
-BAJFINANCE,Bajaj Finance,NBFC,510000,Leading consumer NBFC. High growth but premium valuation.
-HINDUNILVR,Hindustan Unilever,FMCG,560000,FMCG bellwether. Pricing power.
-ITC,ITC Limited,FMCG,540000,Cigarettes cash cow funding FMCG/hotels expansion.
-KOTAKBANK,Kotak Mahindra Bank,Banking,380000,Premium private bank. Conservative underwriting.
-AXISBANK,Axis Bank,Banking,370000,Improving return ratios. Citibank acquisition integration.
-WIPRO,Wipro,IT,320000,Tier-1 IT. Restructuring under new CEO.
-SBIN,State Bank of India,Banking,680000,Largest PSU bank. Credit cycle beneficiary.
-MARUTI,Maruti Suzuki India,Auto,380000,Market leader in passenger vehicles. SUV ramp-up.
-TATAMOTORS,Tata Motors,Auto,340000,JLR recovery play + EV domestic pivot.
-M&M,Mahindra and Mahindra,Auto,360000,SUV and tractor leader. Strong EV pipeline.
-L&T,Larsen and Toubro,Capital Goods,480000,Order book at record. Infra and defence beneficiary.
-SUNPHARMA,Sun Pharmaceutical Industries,Pharma,380000,Largest Indian pharma. US specialty growth.
-ULTRACEMCO,UltraTech Cement,Cement,310000,Largest cement co. Capacity expansion mode.
-TITAN,Titan Company,Consumer Discretionary,340000,Watches and jewellery. Strong brand moat.
-NESTLEIND,Nestle India,FMCG,230000,Premium FMCG. Consistent margin delivery.
-DIVISLAB,Divi's Laboratories,Pharma,140000,API manufacturer. Margin recovery underway.
-DRREDDY,Dr Reddy's Laboratories,Pharma,120000,Generics + specialty. US business scale-up.
-BAJAJ-AUTO,Bajaj Auto,Auto,230000,Two-wheeler + EV. Strong exports.
-EICHERMOT,Eicher Motors,Auto,120000,Royal Enfield premium two-wheeler. Margin expansion.
-HEROMOTOCO,Hero MotoCorp,Auto,95000,Volume leader in entry-level two-wheelers.
-JSWSTEEL,JSW Steel,Metals,220000,Capacity expansion. Domestic demand play.
-TATASTEEL,Tata Steel,Metals,190000,Integrated steel. Europe restructuring key watch.
-HINDALCO,Hindalco Industries,Metals,145000,Aluminium + Novelis. Cyclical play.
-BAJAJFINSV,Bajaj Finserv,NBFC,255000,Financial services holding co. Insurance + NBFC.
-ONGC,Oil and Natural Gas Corp,Energy,240000,Oil explorer PSU. High dividend yield.
-BPCL,Bharat Petroleum Corp,Energy,130000,OMC. Refining margin and city gas expansion.
-PIDILITIND,Pidilite Industries,Chemicals,140000,Fevicol brand moat. Premium consumer adhesives.
-CIPLA,Cipla,Pharma,105000,Branded generics. US filings pipeline.
-SIEMENS,Siemens India,Capital Goods,155000,Industrial automation and energy infra.
-ABB,ABB India,Capital Goods,130000,Power and automation. Order backlog strong.
-HAVELLS,Havells India,Consumer Durables,110000,Electricals and cables. Lloyd white goods.
-GODREJCP,Godrej Consumer Products,FMCG,118000,Personal and home care. Africa and Indonesia exposure.
-LTIM,LTIMindtree,IT,160000,Mid-tier IT. Strong BFSI vertical.
-TECHM,Tech Mahindra,IT,175000,IT + telecom focus. Turnaround under new CEO.
-AUROPHARMA,Aurobindo Pharma,Pharma,68000,Generic pharma. US the key market.
-BRITANNIA,Britannia Industries,FMCG,118000,Biscuits and dairy. Distribution moat.
-ASTRAL,Astral,Chemicals,68000,Plumbing pipes + adhesives. High RoCE.
-VOLTAS,Voltas,Consumer Durables,47000,Market leader in room ACs.
-DIXON,Dixon Technologies India,Electronics Manufacturing,85000,Contract electronics. High growth but thin margins.
-AMBER,Amber Enterprises India,Consumer Durables,22000,AC components OEM. Avoid - small cap, low liquidity.
-SHREECEM,Shree Cement,Cement,90000,Premium cement. High efficiency benchmark.
-AMBUJACEM,Ambuja Cements,Cement,95000,Adani group. Capacity scale-up.
-TATACONSUM,Tata Consumer Products,FMCG,86000,Tea and foods. Integration with Tata brands.
+TATAELXSI,Tata Elxsi,IT,38000,Design + embedded software. ROCE >40%. Automotive and media verticals growing.
+KPITTECH,KPIT Technologies,IT,28000,Auto-embedded software. EV tailwind. High growth. Watch valuation.
+PERSISTENT,Persistent Systems,IT,75000,Mid-tier IT services. Consistent 25%+ growth. May exceed 20k Cr cap - verify.
+MASTEK,Mastek,IT,8000,UK govt digital. Niche moat. Promoter holding borderline - verify pledging.
+BIRLASOFT,Birlasoft,IT,14000,Mid-tier IT. Improving margins post-restructuring.
+KPRMILL,KPR Mill,Textiles,14000,Vertically integrated apparel. High ROCE. Debt-free. Ethanol adds diversification.
+PAGEIND,Page Industries,Consumer,43000,Jockey licensee. Exceptional ROCE. May exceed 20k Cr cap - verify.
+BLUESTARCO,Blue Star,Consumer Durables,18000,AC market leader after Voltas weakness. Expanding capacity.
+CAMS,CAMS,Financial Services,16000,MF transfer agency duopoly. Capital-light. Growing with SIP volumes.
+DEEPAKNTR,Deepak Nitrite,Chemicals,19000,Phenolics and fine chemicals. High ROCE. Watch for commodity cycle impact.
+NAVINFLUOR,Navin Fluorine,Chemicals,16000,Specialty fluorochemicals. CRAMS growth. Capex cycle underway.
+FINEORG,Fine Organic Industries,Chemicals,9000,Oleo-chemicals niche. Exported 50%+ revenues. Debt-free. Promoter ~74%.
+VINATIORGA,Vinati Organics,Chemicals,17000,ATBS near-monopoly globally. Low debt. High ROCE.
+ALKYLAMINE,Alkyl Amines Chemicals,Chemicals,7000,Specialty amines. Niche moat. Watch working capital in down cycles.
+AARTIIND,Aarti Industries,Chemicals,14000,Benzene derivatives. Long-term supply contracts. Capex heavy - monitor CFO.
+SUDARSCHEM,Sudarshan Chemical Industries,Chemicals,6000,Pigments. Niche global player. Improving ROCE trajectory.
+BALAMINES,Balaji Amines,Chemicals,5000,Aliphatic amines. Low debt. High promoter holding. Small cap - verify liquidity.
+GRINDWELL,Grindwell Norton,Capital Goods,18000,Abrasives and ceramics. Saint-Gobain subsidiary. Consistent ROCE >25%.
+CARBORUNIV,Carborundum Universal,Capital Goods,17000,Abrasives. Multiple verticals. Steady compounder. Low debt.
+TIMKEN,Timken India,Capital Goods,12000,Bearings. Industrial capex play. Technically strong. Cummins-style compounder.
+SCHAEFFLER,Schaeffler India,Capital Goods,20000,Bearings + automotive components. German parent. High governance.
+APAR,Apar Industries,Capital Goods,22000,Cables and conductors. Power infra play. May exceed 20k Cr - verify.
+ELECON,Elecon Engineering,Capital Goods,6000,Gears and material handling. Order book improving. Low debt.
+TRIVENIENT,Triveni Turbine,Capital Goods,12000,Steam turbines. Export-heavy. Extremely high ROCE. Asset-light.
+POLYMED,Poly Medicure,Healthcare,11000,Medical devices. High ROCE. Export-led growth. Low debt.
+JBCHEPHARM,JB Chemicals and Pharmaceuticals,Pharma,18000,Branded generics. Russia + domestic. KKR-backed post acquisition.
+NATCOPHARM,Natco Pharma,Pharma,16000,Para IV litigation play. High cash. Crop science division optionality.
+ERIS,Eris Lifesciences,Pharma,9000,Chronic segment branded generics. Acquisition-led growth. Watch integration.
+ALEMBICPH,Alembic Pharmaceuticals,Pharma,10000,USFDA filings ramp. R&D-heavy. Free cash flow improving.
+GLAND,Gland Pharma,Pharma,16000,Injectable generics. US-focused. Fosun overhang - watch promoter moves.
+SYNGENE,Syngene International,Healthcare,15000,Biocon subsidiary. CRO/CRAMS. Recurring revenue model.
+LAURUS,Laurus Labs,Pharma,14000,ARV APIs + CRAMS. Capex cycle peaking. Watch margin recovery.
+CERA,Cera Sanitaryware,Consumer,11000,Tiles and sanitaryware. Asset-light. High ROCE. Small cap - verify liquidity.
+CENTURYPLY,Century Plyboards India,Consumer,16000,Plywood + MDF. Housing tailwind. Growing branded share.
+GREENPANEL,Greenpanel Industries,Consumer,4000,MDF focused. Low debt. Working capital watch. Small cap.
+MOLD-TEK,Mold-Tek Packaging,Consumer,3000,Rigid plastic packaging. IML specialist. Promoter holding high. Very small cap.
+GARWALTEX,Garware Technical Fibres,Industrials,7000,Technical textiles. Niche global market position. Low debt. High ROCE.
+ESABINDIA,ESAB India,Capital Goods,6000,Welding products. Colfax parent. Consistent dividend. High ROCE.
+AAVAS,Aavas Financiers,NBFC,10000,Affordable housing finance. High growth. Watch NPA as rates rise.
+CREDITACC,CreditAccess Grameen,NBFC,12000,Microfinance. High growth but high risk - MFI cycle watch.
+KARURVYSYA,Karur Vysya Bank,Banking,10000,South India focused bank. Improving RoA. Niche corporate book.
+EQUITASBNK,Equitas Small Finance Bank,Banking,7000,SFB transitioning to universal. Deposit franchise building.
+GPPL,Gujarat Pipavav Port,Logistics,8000,APM Maersk subsidiary. Consistent cash flows. Low debt.
+SAFARI,Safari Industries India,Consumer,5000,Luggage. Samsonite India competitor. Travel recovery play.
+CAMPUS,Campus Activewear,Consumer,5000,Sports footwear. Fast growing but execution risk. Verify Q-o-Q trend.
+LATENTVIEW,Latent View Analytics,IT,5000,Data analytics. Cash-rich. Small but high-quality. US BFSI client concentration risk.
+HAPPYFORGE,Happy Forgings,Capital Goods,7000,Auto forgings. New IPO quality. Promoter holding high. Verify liquidity.
+ROUTE,Route Mobile,IT,6000,CPaaS. Global messaging platform. Proximus acquisition overhang.
+EPIGRAL,Epigral,Chemicals,4500,Chlor-alkali + EDC. Capex growth play. Commodity exposure - watch margins.
+AARTIDRUGS,Aarti Drugs,Pharma,3500,API generics. Low debt. Improving post pricing pressure. Small cap.
