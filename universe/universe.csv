@@ -1,51 +1,63 @@
 Ticker,Company,Sector,Market Cap,Notes
-TATAELXSI,Tata Elxsi,IT,38000,Design + embedded software. ROCE >40%. Automotive and media verticals growing.
-KPITTECH,KPIT Technologies,IT,28000,Auto-embedded software. EV tailwind. High growth. Watch valuation.
-PERSISTENT,Persistent Systems,IT,75000,Mid-tier IT services. Consistent 25%+ growth. May exceed 20k Cr cap - verify.
-MASTEK,Mastek,IT,8000,UK govt digital. Niche moat. Promoter holding borderline - verify pledging.
-BIRLASOFT,Birlasoft,IT,14000,Mid-tier IT. Improving margins post-restructuring.
-KPRMILL,KPR Mill,Textiles,14000,Vertically integrated apparel. High ROCE. Debt-free. Ethanol adds diversification.
-PAGEIND,Page Industries,Consumer,43000,Jockey licensee. Exceptional ROCE. May exceed 20k Cr cap - verify.
-BLUESTARCO,Blue Star,Consumer Durables,18000,AC market leader after Voltas weakness. Expanding capacity.
-CAMS,CAMS,Financial Services,16000,MF transfer agency duopoly. Capital-light. Growing with SIP volumes.
-DEEPAKNTR,Deepak Nitrite,Chemicals,19000,Phenolics and fine chemicals. High ROCE. Watch for commodity cycle impact.
-NAVINFLUOR,Navin Fluorine,Chemicals,16000,Specialty fluorochemicals. CRAMS growth. Capex cycle underway.
-FINEORG,Fine Organic Industries,Chemicals,9000,Oleo-chemicals niche. Exported 50%+ revenues. Debt-free. Promoter ~74%.
-VINATIORGA,Vinati Organics,Chemicals,17000,ATBS near-monopoly globally. Low debt. High ROCE.
-ALKYLAMINE,Alkyl Amines Chemicals,Chemicals,7000,Specialty amines. Niche moat. Watch working capital in down cycles.
-AARTIIND,Aarti Industries,Chemicals,14000,Benzene derivatives. Long-term supply contracts. Capex heavy - monitor CFO.
-SUDARSCHEM,Sudarshan Chemical Industries,Chemicals,6000,Pigments. Niche global player. Improving ROCE trajectory.
-BALAMINES,Balaji Amines,Chemicals,5000,Aliphatic amines. Low debt. High promoter holding. Small cap - verify liquidity.
-GRINDWELL,Grindwell Norton,Capital Goods,18000,Abrasives and ceramics. Saint-Gobain subsidiary. Consistent ROCE >25%.
-CARBORUNIV,Carborundum Universal,Capital Goods,17000,Abrasives. Multiple verticals. Steady compounder. Low debt.
-TIMKEN,Timken India,Capital Goods,12000,Bearings. Industrial capex play. Technically strong. Cummins-style compounder.
-SCHAEFFLER,Schaeffler India,Capital Goods,20000,Bearings + automotive components. German parent. High governance.
-APAR,Apar Industries,Capital Goods,22000,Cables and conductors. Power infra play. May exceed 20k Cr - verify.
-ELECON,Elecon Engineering,Capital Goods,6000,Gears and material handling. Order book improving. Low debt.
-TRIVENIENT,Triveni Turbine,Capital Goods,12000,Steam turbines. Export-heavy. Extremely high ROCE. Asset-light.
-POLYMED,Poly Medicure,Healthcare,11000,Medical devices. High ROCE. Export-led growth. Low debt.
-JBCHEPHARM,JB Chemicals and Pharmaceuticals,Pharma,18000,Branded generics. Russia + domestic. KKR-backed post acquisition.
-NATCOPHARM,Natco Pharma,Pharma,16000,Para IV litigation play. High cash. Crop science division optionality.
-ERIS,Eris Lifesciences,Pharma,9000,Chronic segment branded generics. Acquisition-led growth. Watch integration.
-ALEMBICPH,Alembic Pharmaceuticals,Pharma,10000,USFDA filings ramp. R&D-heavy. Free cash flow improving.
-GLAND,Gland Pharma,Pharma,16000,Injectable generics. US-focused. Fosun overhang - watch promoter moves.
-SYNGENE,Syngene International,Healthcare,15000,Biocon subsidiary. CRO/CRAMS. Recurring revenue model.
-LAURUS,Laurus Labs,Pharma,14000,ARV APIs + CRAMS. Capex cycle peaking. Watch margin recovery.
-CERA,Cera Sanitaryware,Consumer,11000,Tiles and sanitaryware. Asset-light. High ROCE. Small cap - verify liquidity.
-CENTURYPLY,Century Plyboards India,Consumer,16000,Plywood + MDF. Housing tailwind. Growing branded share.
-GREENPANEL,Greenpanel Industries,Consumer,4000,MDF focused. Low debt. Working capital watch. Small cap.
-MOLD-TEK,Mold-Tek Packaging,Consumer,3000,Rigid plastic packaging. IML specialist. Promoter holding high. Very small cap.
-GARWALTEX,Garware Technical Fibres,Industrials,7000,Technical textiles. Niche global market position. Low debt. High ROCE.
-ESABINDIA,ESAB India,Capital Goods,6000,Welding products. Colfax parent. Consistent dividend. High ROCE.
-AAVAS,Aavas Financiers,NBFC,10000,Affordable housing finance. High growth. Watch NPA as rates rise.
-CREDITACC,CreditAccess Grameen,NBFC,12000,Microfinance. High growth but high risk - MFI cycle watch.
-KARURVYSYA,Karur Vysya Bank,Banking,10000,South India focused bank. Improving RoA. Niche corporate book.
-EQUITASBNK,Equitas Small Finance Bank,Banking,7000,SFB transitioning to universal. Deposit franchise building.
-GPPL,Gujarat Pipavav Port,Logistics,8000,APM Maersk subsidiary. Consistent cash flows. Low debt.
-SAFARI,Safari Industries India,Consumer,5000,Luggage. Samsonite India competitor. Travel recovery play.
-CAMPUS,Campus Activewear,Consumer,5000,Sports footwear. Fast growing but execution risk. Verify Q-o-Q trend.
-LATENTVIEW,Latent View Analytics,IT,5000,Data analytics. Cash-rich. Small but high-quality. US BFSI client concentration risk.
-HAPPYFORGE,Happy Forgings,Capital Goods,7000,Auto forgings. New IPO quality. Promoter holding high. Verify liquidity.
-ROUTE,Route Mobile,IT,6000,CPaaS. Global messaging platform. Proximus acquisition overhang.
-EPIGRAL,Epigral,Chemicals,4500,Chlor-alkali + EDC. Capex growth play. Commodity exposure - watch margins.
-AARTIDRUGS,Aarti Drugs,Pharma,3500,API generics. Low debt. Improving post pricing pressure. Small cap.
+TIPSINDLTD,Tips Music,Media,8252,Content library moat. ROCE 122%. Asset-light. High cash generation.
+ONEGLOBAL,One Global Services,IT Services,1108,VERIFY TICKER. Very high growth 201%/269% - check if sustainable or base effect.
+WAAREERENEW,Waaree Renewable Energy,Energy,9477,Solar EPC. High growth. VERIFY TICKER - may be WAAREEENER on NSE.
+JEENASIKHO,Jeena Sikho Lifecare,Healthcare,7433,Ayurvedic/wellness. High ROCE 70%. Watch for regulatory risk.
+VIVIDMERCANT,Vivid Electromech,Capital Goods,1287,VERIFY TICKER. Electrical systems. Watch liquidity - small cap.
+FRONTSPRING,Frontier Springs,Auto Components,1660,VERIFY TICKER. Springs manufacturer. ROCE 50%+. Watch volumes.
+SHILCHART,Shilchar Technologies,Capital Goods,5295,Transformers. High ROCE 50%. Quarterly numbers volatile - verify trend.
+SAHANASYS,Sahana Systems,IT Services,861,VERIFY TICKER. High growth. Very small - watch liquidity carefully.
+MPSLTD,MPS Ltd,Media,5000,Publishing services. Consistent compounder. Good dividend yield.
+BONDADA,Bondada Engineering,Capital Goods,3313,Power infra EPC. High growth. Watch order book execution risk.
+SRMCONTR,SRM Contractors,Construction,1196,VERIFY TICKER - recent IPO. High growth but small. Verify promoter quality.
+WEALTHFIRST,Wealth First Portfolio,Financial Services,955,VERIFY TICKER. Wealth management. Erratic quarterly (606% var) - watch.
+SIKAINT,Sika Interplant Systems,Capital Goods,2335,VERIFY TICKER. High PE 66x. Niche aerospace/defence components.
+PNGSGARGI,PNGS Gargi Fashion Jewellery,Consumer,628,VERIFY TICKER - recent IPO. Very small. High liquidity risk.
+CORONARE,Corona Remedies,Pharma,12589,VERIFY TICKER. Branded generics. ROCE 33%. High PE 59x - check valuation.
+PRECWIRE,Precision Wires India,Capital Goods,7554,Winding wires. High sales growth 67% QoQ - verify if sustainable.
+NEETUYOSHI,Neetu Yoshi,Consumer,635,VERIFY TICKER. Very small. Verify business and liquidity before trading.
+KRISHNADEFENCE,Krishna Defence,Defence,1766,VERIFY TICKER. Defence components. High growth. Watch order concentration.
+KALYANICAST,Kalyani Cast-Tech,Auto Components,550,VERIFY TICKER. Very small cap. Auto castings. Verify liquidity.
+BANCOINDIA,Banco Products,Auto Components,9806,Auto sealing. Consistent. ROCE 30%. Decent dividend yield.
+ARROWGREEN,Arrow Greentech,Consumer,1169,VERIFY TICKER. Specialty films/packaging. Quarterly numbers weakening.
+SHAILY,Shaily Engineering Plastics,Plastics,14529,Plastic components. High PE 90x. Strong growth. Watch valuation.
+ECORECYCL,Eco Recycling,Industrials,962,VERIFY TICKER. E-waste recycling. Niche. Very small - liquidity risk.
+CAPTAINTECH,Captain Technoplast,Plastics,617,VERIFY TICKER. Very small. Verify correct NSE symbol and liquidity.
+AUTOCORPGOA,Automobile Corporation of Goa,Auto,1114,Tata subsidiary. Bus bodies. Quarterly numbers volatile.
+EXHICON,Exhicon Events and Media,Media,750,VERIFY TICKER. Events company. High growth from low base. Watch moat.
+FIEMIND,Fiem Industries,Auto Components,6792,Auto lighting. ROCE 29%. Consistent growth. Decent dividend yield.
+BLSINFO,BLS International Services,Financial Services,10479,Visa outsourcing. Capital-light moat. High ROCE. Government contract risk.
+MACPOWER,Macpower CNC Machines,Capital Goods,1682,CNC machines. Capex cycle beneficiary. High quarterly growth.
+INDIAMART,Indiamart Intermesh,Internet,10560,B2B marketplace. Strong moat. Sticky SME subscribers. Capital-light.
+ADVAIT,Advait Energy Transitions,Capital Goods,2400,VERIFY TICKER - may be ADVAITENRG. Power cables and conductors.
+DANLAW,Danlaw Technologies India,IT Services,584,VERIFY TICKER. Auto tech. Small. Verify liquidity before trading.
+SYNCOMF,Syncom Formulations India,Pharma,1263,Very low CMP (Rs13). Penny stock risk. Verify promoter quality.
+DISA,Disa India,Capital Goods,1739,Foundry equipment. Consistent. German parent (Norican). ROCE 26%.
+BORORENEW,Borosil Renewables,Energy,7795,Solar glass duopoly India. Capex cycle. High quarterly growth 156%.
+DYNCABLES,Dynamic Cables,Capital Goods,1961,VERIFY TICKER. Power cables. Growth from infra push. Small cap.
+AMAL,Amal Ltd,Chemicals,924,VERIFY TICKER. Specialty chemicals. Small. ROCE 26%.
+3BBLACKBIO,3B Blackbio Dx,Healthcare,1038,VERIFY TICKER. Diagnostics. Post-COVID normalization. Watch growth trend.
+SUPRIYA,Supriya Lifescience,Pharma,7435,API manufacturer. ROCE 25%. US and domestic markets. Watch FDA risk.
+NEWGEN,Newgen Software Technologies,IT,7854,BPM/low-code platform. Recurring revenue. Consistent growth. Good moat.
+ACCENTMICR,Accent Microcell,Pharma,1305,VERIFY TICKER. Excipients for pharma. Niche. Small cap.
+RAJOO,Rajoo Engineers,Capital Goods,925,Plastics processing machinery. Exporter. Consistent ROCE.
+KWALITYPHARMA,Kwality Pharmaceuticals,Pharma,2710,VERIFY TICKER. API and formulations. High growth. Verify promoter holding.
+SANDUMA,Sandur Manganese and Iron Ores,Metals,10022,Manganese mining. Steel inputs. High quarterly profits. Commodity exposure.
+GOLDIAM,Goldiam International,Jewellery,5617,Diamond jewellery exporter. US market. ROCE 23%. Watch FX and demand risk.
+SHAKTIPUMPS,Shakti Pumps India,Capital Goods,6375,Solar pumps PM-KUSUM scheme. High growth. Quarterly profits dipped 46% - watch.
+BEMCO,Bemco Hydraulics,Capital Goods,502,VERIFY TICKER. Very small. Hydraulic systems. Liquidity risk - likely skip at runtime.
+RAILTEL,Railtel Corporation of India,Telecom,9265,Railway PSU. Telecom infra. Consistent cash flows. Govt ownership risk.
+BALUFORGE,Balu Forge Industries,Auto Components,5687,VERIFY TICKER - recent IPO. Auto forgings. High growth from low base.
+PREMEXPLOSIVES,Premier Explosives,Defence,3445,Mining explosives and defence. ROCE 22%. High PE 69x. Government orders.
+KOVAIMEDICAL,Kovai Medical Center and Hospital,Healthcare,6404,South India hospital chain. Consistent. ROCE 22%. Steady growth.
+VENUSPIPES,Venus Pipes and Tubes,Metals,3327,Stainless steel pipes. ROCE 22%. Export-led. Watch commodity margins.
+TINNARA,Tinna Rubber and Infrastructure,Industrials,2001,VERIFY TICKER. Tyre recycling/crumb rubber. Niche. Watch volumes.
+TPLPLASTECH,TPL Plastech,Plastics,598,VERIFY TICKER. Very small. Packaging. Liquidity risk.
+NDRAUTO,NDR Auto Components,Auto Components,1977,VERIFY TICKER - recent IPO. Auto parts. Watch promoter track record.
+JARO,Jaro Education,Education,1021,VERIFY TICKER. Ed-tech/executive education. Watch post-COVID growth normalization.
+POWERMECH,Power Mech Projects,Construction,8275,Power plant O&M and EPC. Consistent. ROCE 21%. Order book driven.
+VESUVIUS,Vesuvius India,Capital Goods,9133,Refractory products. UK parent. Consistent ROCE. Niche steel sector play.
+OLECTRA,Olectra Greentech,Auto,11352,Electric buses. ROCE 21%. Quarterly profit 164% growth. Watch execution.
+BHARATSE,Bharat Seats,Auto Components,1510,VERIFY TICKER. Auto seating - Maruti supplier. Small. Consistent.
+SEAMEC,SEAMEC Ltd,Industrials,3870,Offshore support vessels. Consistent cash. ROCE 20%. Cyclical risk.
+SOUTHWEST,South West Pinnacle Exploration,Oil and Gas,756,VERIFY TICKER. Oilfield services. Small. Verify liquidity.

@@ -24,6 +24,7 @@ BEFORE any order is placed, paper or live):
 import os
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +32,11 @@ PAPER_MODE = os.getenv("PAPER_MODE", "true").lower() == "true"
 MAX_ADV_PCT = float(os.getenv("MAX_ADV_PCT", 2.0))       # max 2% of avg daily volume
 CIRCUIT_BUFFER_PCT = float(os.getenv("CIRCUIT_BUFFER_PCT", 1.5))
 CORP_ACTION_BLACKOUT_DAYS = int(os.getenv("CORP_ACTION_BLACKOUT_DAYS", 3))
+MIN_DAILY_TURNOVER_INR = float(os.getenv("MIN_DAILY_TURNOVER_INR", 3_00_00_000))  # ₹3 Cr
+
+# Module-level instrument token cache — populated once per session on first use.
+# Avoids fetching all ~1800 NSE instruments on every pre-trade check.
+_instrument_token_cache: dict[str, int] = {}
 
 
 @dataclass
@@ -65,6 +71,54 @@ def get_ltp(ticker: str) -> float:
     return quote[f"NSE:{ticker}"]["last_price"]
 
 
+def _get_instrument_token(kite, ticker: str) -> int | None:
+    """
+    Returns the NSE instrument token for a ticker, using a module-level cache.
+    The full instruments list (~1800 rows) is fetched once per session and cached.
+    Returns None if the ticker is not found (bad symbol, or not on NSE).
+    """
+    global _instrument_token_cache
+    if not _instrument_token_cache:
+        log.info("Fetching NSE instrument list for token cache...")
+        instruments = kite.instruments("NSE")
+        _instrument_token_cache = {
+            i["tradingsymbol"]: i["instrument_token"] for i in instruments
+        }
+        log.info(f"Cached {len(_instrument_token_cache)} NSE instruments.")
+    return _instrument_token_cache.get(ticker)
+
+
+def get_20d_avg_turnover(ticker: str) -> float:
+    """
+    Returns the 20-trading-day average daily turnover in INR (volume × close).
+    Fetches from Kite historical data API (requires ₹500/month plan).
+    Returns 0.0 on any error so callers can decide to skip or pass-through.
+    """
+    try:
+        kite = get_kite_client()
+        token = _get_instrument_token(kite, ticker)
+        if token is None:
+            log.warning(f"No instrument token found for {ticker} — check NSE symbol.")
+            return 0.0
+
+        to_date = datetime.now()
+        from_date = to_date - timedelta(days=35)  # ~35 calendar days → ~20+ trading days
+        candles = kite.historical_data(token, from_date, to_date, "day")
+
+        if not candles:
+            log.warning(f"No historical data returned for {ticker}.")
+            return 0.0
+
+        recent = candles[-20:] if len(candles) >= 20 else candles
+        avg_turnover = sum(c["volume"] * c["close"] for c in recent) / len(recent)
+        log.debug(f"{ticker} 20d avg turnover: ₹{avg_turnover:,.0f}")
+        return avg_turnover
+
+    except Exception as e:
+        log.warning(f"Could not compute avg turnover for {ticker}: {e}")
+        return 0.0
+
+
 def get_quote_details(ticker: str) -> dict:
     """Fetch full quote including circuit limits and OHLCV."""
     kite = get_kite_client()
@@ -93,11 +147,31 @@ def microstructure_checks(ticker: str, capital_to_deploy: float) -> tuple[bool, 
         if pct_from_lower < CIRCUIT_BUFFER_PCT:
             return False, f"{ticker} is within {pct_from_lower:.1f}% of lower circuit — skip."
 
-        # TODO: ADV check — requires historical OHLCV data
-        # adv = get_20d_avg_volume(ticker)
-        # approx_shares = capital_to_deploy / ltp
-        # if approx_shares > adv * (MAX_ADV_PCT / 100):
-        #     return False, f"Order size > {MAX_ADV_PCT}% of ADV — would move the market."
+        # Liquidity check: skip stocks whose 20-day avg daily turnover is below
+        # MIN_DAILY_TURNOVER_INR (default ₹3 Cr). This catches micro-caps that
+        # pass the fundamental screen but are too illiquid to trade without
+        # significant slippage. Fail-safe: if data is unavailable, log and continue.
+        avg_turnover = get_20d_avg_turnover(ticker)
+        if avg_turnover == 0.0:
+            log.warning(
+                f"{ticker}: could not verify liquidity — proceeding with caution."
+            )
+        elif avg_turnover < MIN_DAILY_TURNOVER_INR:
+            return False, (
+                f"{ticker} avg daily turnover ₹{avg_turnover/1e7:.1f}Cr < "
+                f"minimum ₹{MIN_DAILY_TURNOVER_INR/1e7:.0f}Cr — too illiquid to trade."
+            )
+
+        # ADV check: order size must not exceed MAX_ADV_PCT of 20-day average daily volume.
+        # Prevents your own order from moving the price against you.
+        if avg_turnover > 0:
+            approx_shares = capital_to_deploy / ltp
+            avg_daily_volume = avg_turnover / ltp  # rough estimate from turnover
+            if approx_shares > avg_daily_volume * (MAX_ADV_PCT / 100):
+                return False, (
+                    f"Order size ({approx_shares:.0f} shares) > {MAX_ADV_PCT}% of "
+                    f"20d avg volume ({avg_daily_volume:.0f}) — would move the market."
+                )
 
         # TODO: Corporate action blackout
         # if days_to_next_corporate_action(ticker) <= CORP_ACTION_BLACKOUT_DAYS:
