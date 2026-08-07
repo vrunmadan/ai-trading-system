@@ -1,0 +1,25 @@
+# Environment variables — NEVER commit
+.env
+
+# OAuth credentials and tokens — NEVER commit
+credentials/
+!credentials/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+
+# SQLite ledger (local state — not for version control)
+ledger/*.db
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

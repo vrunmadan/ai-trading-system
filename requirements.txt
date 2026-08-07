@@ -1,0 +1,11 @@
+anthropic
+openai
+google-generativeai
+kiteconnect
+python-dotenv
+apscheduler
+pytz
+requests
+python-dateutil
+flask
+gspread
