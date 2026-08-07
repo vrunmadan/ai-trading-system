@@ -191,6 +191,60 @@ def get_trades_for_week(week_start: str, week_end: str) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Kite token storage (avoids Railway env var restarts for daily token refresh)
+# ---------------------------------------------------------------------------
+
+def _ensure_kv_store():
+    """Create the kv_store table if it doesn't exist (called lazily)."""
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS kv_store (
+                key     TEXT PRIMARY KEY,
+                value   TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.commit()
+
+
+def save_kite_token(access_token: str) -> None:
+    """
+    Upsert the Kite access_token into the ledger DB.
+    Called by auto_refresh_kite_token.py after each successful login.
+    """
+    _ensure_kv_store()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO kv_store (key, value, updated_at)
+            VALUES ('kite_access_token', ?, ?)
+            ON CONFLICT(key) DO UPDATE
+                SET value = excluded.value, updated_at = excluded.updated_at
+            """,
+            (access_token, now_ist()),
+        )
+        conn.commit()
+
+
+def get_kite_token() -> str | None:
+    """
+    Returns the most recently saved Kite access_token from the ledger DB,
+    or None if no token has been saved yet (first run, or DB wiped).
+    """
+    try:
+        _ensure_kv_store()
+        with sqlite3.connect(DB_PATH) as conn:
+            row = conn.execute(
+                "SELECT value FROM kv_store WHERE key = 'kite_access_token'"
+            ).fetchone()
+            return row[0] if row else None
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Portfolio risk helpers (used by risk_manager/portfolio_risk.py)
 # ---------------------------------------------------------------------------
 

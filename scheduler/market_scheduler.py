@@ -29,6 +29,31 @@ scheduler = BlockingScheduler(timezone=IST)
 
 
 @scheduler.scheduled_job(
+    CronTrigger(day_of_week="mon-fri", hour=7, minute=30, timezone=IST),
+    id="kite_token_refresh",
+    name="Daily Kite token refresh",
+    max_instances=1,
+    coalesce=True,
+)
+def kite_token_refresh():
+    """
+    7:30 AM IST — refresh the Kite access token before markets open at 9:15.
+    Runs automatically. Requires KITE_USER_ID, KITE_PASSWORD, KITE_TOTP_SECRET in env.
+    Failure is logged but does NOT crash the scheduler.
+    """
+    log.info("Refreshing Kite access token...")
+    try:
+        from setup.auto_refresh_kite_token import auto_refresh_token
+        auto_refresh_token()
+    except Exception as e:
+        log.error(
+            f"Kite token refresh FAILED: {e}\n"
+            "Trading will fail today until the token is refreshed manually.\n"
+            "Run: python setup/auto_refresh_kite_token.py"
+        )
+
+
+@scheduler.scheduled_job(
     CronTrigger(
         day_of_week="mon-fri",
         hour="9,10,11,12,13,14,15",

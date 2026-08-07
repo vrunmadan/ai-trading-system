@@ -50,15 +50,27 @@ class ExecutionResult:
 
 
 def get_kite_client():
-    """Returns an authenticated KiteConnect instance."""
+    """
+    Returns an authenticated KiteConnect instance.
+
+    Token priority:
+      1. Ledger DB  — written by auto_refresh_kite_token.py (freshest, updated daily)
+      2. KITE_ACCESS_TOKEN env var — fallback for first-run or if DB is empty
+    """
     from kiteconnect import KiteConnect
+    from ledger.db import get_kite_token
+
     api_key = os.getenv("KITE_API_KEY")
-    access_token = os.getenv("KITE_ACCESS_TOKEN")
-    if not api_key or not access_token:
+    if not api_key:
+        raise EnvironmentError("KITE_API_KEY is not set.")
+
+    # Prefer token from DB (refreshed daily by scheduler) over env var
+    access_token = get_kite_token() or os.getenv("KITE_ACCESS_TOKEN")
+    if not access_token:
         raise EnvironmentError(
-            "KITE_API_KEY and KITE_ACCESS_TOKEN must be set in .env. "
-            "Run: python setup/refresh_kite_token.py"
+            "No Kite access_token found. Run: python setup/auto_refresh_kite_token.py"
         )
+
     kite = KiteConnect(api_key=api_key)
     kite.set_access_token(access_token)
     return kite
