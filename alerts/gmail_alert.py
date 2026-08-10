@@ -292,6 +292,64 @@ def handle_email_action(action: str, signal_id: int):
         return "Unknown action.", False
 
 
+def send_kite_login_email() -> bool:
+    """
+    Sent at 7:30 AM IST every weekday. One big button — user taps it,
+    logs into Zerodha normally, and Railway captures the token automatically.
+    No passwords, no TOTP secrets stored anywhere.
+
+    Requires the Kite app redirect URL to be set to:
+      https://ai-trading-system-production-6af9.up.railway.app/kite_callback
+    at https://developers.kite.trade/apps
+    """
+    api_key    = os.getenv("KITE_API_KEY", "")
+    railway_url = RAILWAY_URL
+
+    login_url = f"https://kite.zerodha.com/connect/login?v=3&api_key={api_key}"
+
+    html = f"""
+<!DOCTYPE html>
+<html>
+<head><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+             max-width:480px;margin:0 auto;padding:32px 20px;background:#f5f5f5">
+  <div style="background:#fff;border-radius:12px;padding:32px 28px;
+              box-shadow:0 2px 8px rgba(0,0,0,.08);text-align:center">
+
+    <div style="font-size:48px;margin-bottom:12px">🔑</div>
+    <h2 style="margin:0 0 8px;font-size:22px">Activate today's trading</h2>
+    <p style="color:#666;margin:0 0 28px;font-size:14px;line-height:1.5">
+      Tap the button below and log into Zerodha.<br>
+      Railway captures the token automatically — you're done in 20 seconds.
+    </p>
+
+    <a href="{login_url}"
+       style="display:block;background:#387ed1;color:#fff;text-decoration:none;
+              padding:16px 0;border-radius:10px;font-size:18px;font-weight:700;
+              letter-spacing:0.3px;margin-bottom:24px">
+      Log in to Zerodha →
+    </a>
+
+    <p style="color:#aaa;font-size:12px;margin:0;line-height:1.6">
+      After login you'll see a green "Ready to trade" confirmation.<br>
+      If you don't activate by 9:15 AM, the system will skip today's cycles.
+    </p>
+  </div>
+</body>
+</html>"""
+
+    plain = (
+        f"Tap to activate today's Kite trading session:\n{login_url}\n\n"
+        "After logging in you'll see a green confirmation page. Done.\n"
+        "If not activated by 9:15 AM, today's research cycles will be skipped."
+    )
+
+    sent = _send_email("🔑 Activate today's trading — tap to log in", html, plain_body=plain)
+    if sent:
+        log.info("Kite morning login email sent.")
+    return sent
+
+
 def send_eod_missed_opportunities() -> None:
     """
     Called at EOD for any signals still in PENDING status.

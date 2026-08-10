@@ -120,6 +120,64 @@ def email_action():
 
 
 # ---------------------------------------------------------------------------
+# Kite token callback — receives request_token after user logs in via email link
+# ---------------------------------------------------------------------------
+
+@app.route("/kite_callback", methods=["GET"])
+def kite_callback():
+    """
+    Zerodha redirects here after the user clicks the morning login link and
+    completes Kite Connect login. Captures the request_token, exchanges it
+    for an access_token, and saves it to the ledger DB.
+
+    To activate: set your Kite app's redirect URL to:
+      https://ai-trading-system-production-6af9.up.railway.app/kite_callback
+    at https://developers.kite.trade/apps
+    """
+    from flask import make_response
+
+    request_token = request.args.get("request_token", "")
+    status        = request.args.get("status", "")
+
+    if status != "success" or not request_token:
+        log.warning(f"Kite callback: bad params status={status!r} token={request_token!r}")
+        html = _html_response(
+            "Login failed",
+            "Zerodha did not return a valid token. Please try the login link again.",
+            False,
+        )
+        return make_response(html, 400)
+
+    try:
+        from kiteconnect import KiteConnect
+        kite = KiteConnect(api_key=os.getenv("KITE_API_KEY"))
+        session_data = kite.generate_session(
+            request_token, api_secret=os.getenv("KITE_API_SECRET")
+        )
+        access_token = session_data["access_token"]
+    except Exception as e:
+        log.error(f"Kite generate_session failed: {e}", exc_info=True)
+        html = _html_response("Token exchange failed", str(e), False)
+        return make_response(html, 500)
+
+    try:
+        from ledger.db import save_kite_token
+        save_kite_token(access_token)
+        log.info(f"Kite access_token refreshed via callback. ({access_token[:8]}...)")
+    except Exception as e:
+        log.error(f"Failed to save Kite token to DB: {e}", exc_info=True)
+        html = _html_response("Save failed", str(e), False)
+        return make_response(html, 500)
+
+    html = _html_response(
+        "Ready to trade 🟢",
+        "Kite token refreshed. Today's trading session is active. You can close this page.",
+        True,
+    )
+    return make_response(html, 200)
+
+
+# ---------------------------------------------------------------------------
 # Scheduler in background thread
 # ---------------------------------------------------------------------------
 
@@ -132,6 +190,14 @@ def _start_scheduler():
 
         IST = pytz.timezone("Asia/Kolkata")
         scheduler = BackgroundScheduler(timezone=IST)
+
+        # Kite login prompt: Mon-Fri 7:30 IST
+        scheduler.add_job(
+            func=_safe_send_kite_login_email,
+            trigger=CronTrigger(day_of_week="mon-fri", hour=7, minute=30, timezone=IST),
+            id="kite_login_prompt",
+            name="Morning Kite login email",
+        )
 
         # Research cycle: Mon-Fri 9:15, 10:15, ..., 15:15 IST
         scheduler.add_job(
@@ -171,6 +237,14 @@ def _start_scheduler():
     except Exception as e:
         log.error(f"Scheduler failed to start: {e}", exc_info=True)
         return None
+
+
+def _safe_send_kite_login_email():
+    try:
+        from alerts.gmail_alert import send_kite_login_email
+        send_kite_login_email()
+    except Exception as e:
+        log.error(f"Kite login email failed: {e}", exc_info=True)
 
 
 def _safe_run_cycle():
