@@ -27,8 +27,10 @@ All public functions fail silently with a log.warning() if Sheets is not
 configured — the pipeline never breaks because of a missing spreadsheet.
 """
 
+import base64
 import logging
 import os
+import tempfile
 from datetime import datetime
 from typing import Optional
 
@@ -40,6 +42,47 @@ IST = pytz.timezone("Asia/Kolkata")
 OAUTH_CLIENT_PATH    = os.getenv("SHEETS_OAUTH_CLIENT_PATH", "credentials/oauth_client.json")
 AUTHORIZED_USER_PATH = os.getenv("SHEETS_AUTHORIZED_USER_PATH", "credentials/authorized_user.json")
 SPREADSHEET_ID       = os.getenv("SHEETS_SPREADSHEET_ID", "")
+
+# Railway env vars — base64-encoded credential files written during setup.
+# On Railway, the credentials/ directory doesn't exist, so we decode these
+# env vars and write them to /tmp/ on startup instead.
+_OAUTH_CLIENT_B64    = os.getenv("SHEETS_OAUTH_CLIENT_B64", "")
+_AUTHORIZED_USER_B64 = os.getenv("SHEETS_AUTHORIZED_USER_B64", "")
+
+# Temp paths used when running on Railway (overrides file-based paths above)
+_TMP_OAUTH_CLIENT    = os.path.join(tempfile.gettempdir(), "sheets_oauth_client.json")
+_TMP_AUTHORIZED_USER = os.path.join(tempfile.gettempdir(), "sheets_authorized_user.json")
+
+
+def _write_credentials_from_env() -> bool:
+    """
+    Decode SHEETS_OAUTH_CLIENT_B64 and SHEETS_AUTHORIZED_USER_B64 from env
+    and write them to /tmp/. Called once per process start when files don't exist.
+    Returns True if credentials are now available (either from files or env vars).
+    """
+    if os.path.exists(AUTHORIZED_USER_PATH):
+        return True  # Local files present — no action needed
+
+    if not _OAUTH_CLIENT_B64 or not _AUTHORIZED_USER_B64:
+        return False  # Neither files nor env vars — Sheets won't work
+
+    try:
+        with open(_TMP_OAUTH_CLIENT, "w") as f:
+            f.write(base64.b64decode(_OAUTH_CLIENT_B64).decode("utf-8"))
+        with open(_TMP_AUTHORIZED_USER, "w") as f:
+            f.write(base64.b64decode(_AUTHORIZED_USER_B64).decode("utf-8"))
+        log.info("Sheets credentials decoded from env vars to /tmp/.")
+        return True
+    except Exception as e:
+        log.error(f"Failed to decode Sheets credentials from env vars: {e}")
+        return False
+
+
+def _resolve_cred_paths() -> tuple[str, str]:
+    """Return the actual credential file paths to use (local or /tmp/)."""
+    if os.path.exists(AUTHORIZED_USER_PATH):
+        return OAUTH_CLIENT_PATH, AUTHORIZED_USER_PATH
+    return _TMP_OAUTH_CLIENT, _TMP_AUTHORIZED_USER
 
 TAB_TRADES    = "Trades"
 TAB_SIGNALS   = "Signals"
@@ -80,10 +123,10 @@ def _configured() -> bool:
             "Google Sheets not configured — set SHEETS_SPREADSHEET_ID in .env to enable trade logging."
         )
         return False
-    if not os.path.exists(AUTHORIZED_USER_PATH):
+    if not _write_credentials_from_env():
         log.warning(
-            f"Sheets auth token not found at {AUTHORIZED_USER_PATH}. "
-            "Run `python setup/authorize_sheets.py` once to authenticate."
+            "Sheets credentials not found. Either run `python setup/authorize_sheets.py` locally "
+            "or set SHEETS_OAUTH_CLIENT_B64 and SHEETS_AUTHORIZED_USER_B64 in Railway env vars."
         )
         return False
     return True
@@ -93,9 +136,10 @@ def _get_client():
     """Return an authenticated gspread client using OAuth2, or None on failure."""
     try:
         import gspread
+        oauth_path, auth_path = _resolve_cred_paths()
         return gspread.oauth(
-            credentials_filename=OAUTH_CLIENT_PATH,
-            authorized_user_filename=AUTHORIZED_USER_PATH,
+            credentials_filename=oauth_path,
+            authorized_user_filename=auth_path,
         )
     except Exception as e:
         log.error(f"gspread OAuth auth failed: {e}")
