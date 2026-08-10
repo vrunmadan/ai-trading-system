@@ -230,7 +230,7 @@ def handle_email_action(action: str, signal_id: int):
 
         with get_db() as conn:
             row = conn.execute(
-                "SELECT ticker, direction, sized_quantity FROM signals WHERE id=?",
+                "SELECT ticker, direction, sized_quantity, capital_to_deploy FROM signals WHERE id=?",
                 (signal_id,),
             ).fetchone()
 
@@ -238,7 +238,11 @@ def handle_email_action(action: str, signal_id: int):
             log.error(f"Signal {signal_id} not found in ledger")
             return "Signal not found.", False
 
-        capital_to_deploy = float(os.getenv("TOTAL_CAPITAL_INR", 1_000_000)) * 0.20
+        # Use the capital the Risk Sizer already approved; fall back to 20% if column
+        # is NULL (signals logged before this fix was deployed).
+        capital_to_deploy = float(row["capital_to_deploy"] or 0) or (
+            float(os.getenv("TOTAL_CAPITAL_INR", 1_000_000)) * 0.20
+        )
 
         result = execute_trade(
             signal_id=signal_id,

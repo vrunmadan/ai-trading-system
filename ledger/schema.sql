@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS signals (
     qc_verdict TEXT,                   -- AGREE / DISAGREE / NEEDS_MORE_DATA
     qc_rationale TEXT,
     sized_quantity INTEGER,
+    capital_to_deploy REAL,             -- INR approved by Risk Sizer (stored so Trader can reuse it)
     sizer_notes TEXT,
     alert_sent_at TEXT,
     user_response TEXT,                -- APPROVED / REJECTED / NO_RESPONSE

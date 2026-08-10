@@ -121,6 +121,8 @@ def auto_refresh_token() -> str:
 
     # ----------------------------------------------------------------
     # Step 3: Grab request_token from API login redirect
+    # Zerodha routes through connect/finish as an intermediate step —
+    # we follow it once more to get the actual request_token redirect.
     # ----------------------------------------------------------------
     log.info("Step 3 — fetching request_token via API redirect...")
     try:
@@ -133,6 +135,20 @@ def auto_refresh_token() -> str:
         raise RuntimeError(f"API redirect request failed: {e}")
 
     redirect_url = resp.headers.get("Location", "")
+
+    # If Zerodha lands on connect/finish (intermediate), follow it once more
+    if "connect/finish" in redirect_url and "request_token" not in redirect_url:
+        log.info("Step 3a — following connect/finish intermediate redirect...")
+        finish_url = (
+            redirect_url if redirect_url.startswith("http")
+            else f"https://kite.zerodha.com{redirect_url}"
+        )
+        try:
+            resp = session.get(finish_url, allow_redirects=False, timeout=20)
+        except Exception as e:
+            raise RuntimeError(f"connect/finish request failed: {e}")
+        redirect_url = resp.headers.get("Location", "")
+
     match = re.search(r"request_token=([A-Za-z0-9]+)", redirect_url)
     if not match:
         raise RuntimeError(

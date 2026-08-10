@@ -47,6 +47,7 @@ class ExecutionResult:
     quantity: int
     notes: str
     mode: str  # "PAPER" | "LIVE"
+    trade_id: int | None = None  # DB row id from log_trade(); used for Sheets mirroring
 
 
 def get_kite_client():
@@ -244,7 +245,7 @@ def execute_trade(
         return ExecutionResult(
             success=True, order_id=f"PAPER-{trade_id}", fill_price=ltp,
             quantity=quantity, notes=f"Paper trade logged. {check_note}",
-            mode="PAPER",
+            mode="PAPER", trade_id=trade_id,
         )
 
     # LIVE execution — only reached when PAPER_MODE=false
@@ -259,13 +260,13 @@ def execute_trade(
             product=kite.PRODUCT_CNC,  # delivery (not intraday)
             variety=kite.VARIETY_REGULAR,
         )
-        log_trade(signal_id, ticker, direction, quantity, ltp, mode="LIVE")
+        db_trade_id = log_trade(signal_id, ticker, direction, quantity, ltp, mode="LIVE")
         update_signal_response(signal_id, "APPROVED")
         log.info(f"[LIVE] Order placed: {order_id} — {kite_direction} {quantity} x {ticker}")
         return ExecutionResult(
             success=True, order_id=str(order_id), fill_price=ltp,
             quantity=quantity, notes=f"Live order placed. {check_note}",
-            mode="LIVE",
+            mode="LIVE", trade_id=db_trade_id,
         )
     except Exception as e:
         log.error(f"Order placement failed for {ticker}: {e}")

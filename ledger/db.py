@@ -58,8 +58,8 @@ def log_signal(signal, sizing, qc_verdict=None) -> int:
                 created_at, ticker, regime, strategy_bucket, direction,
                 technical_score, fundamental_score, confidence_score,
                 researcher_rationale, qc_verdict, qc_rationale,
-                sized_quantity, sizer_notes, status
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                sized_quantity, capital_to_deploy, sizer_notes, status
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 now_ist(),
@@ -74,6 +74,7 @@ def log_signal(signal, sizing, qc_verdict=None) -> int:
                 qc_verdict.verdict if qc_verdict else None,
                 qc_verdict.rationale if qc_verdict else None,
                 sizing.quantity,
+                sizing.capital_to_deploy,
                 sizing.notes,
                 "PENDING",
             ),
