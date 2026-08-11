@@ -46,7 +46,7 @@ RAILWAY_URL        = os.getenv("RAILWAY_URL", "http://localhost:8080").rstrip("/
 APPROVAL_SECRET    = os.getenv("APPROVAL_SECRET", "change-me-in-dotenv")
 
 SMTP_HOST = "smtp.gmail.com"
-SMTP_PORT = 587
+SMTP_PORT = 465   # SSL (port 587/STARTTLS is blocked on Railway)
 
 
 # ---------------------------------------------------------------------------
@@ -90,9 +90,7 @@ def _send_email(subject: str, html_body: str, plain_body: str = "") -> bool:
             msg.attach(MIMEText(plain_body, "plain"))
         msg.attach(MIMEText(html_body, "html"))
 
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as smtp:
-            smtp.ehlo()
-            smtp.starttls()
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT) as smtp:
             smtp.login(ALERT_EMAIL, GMAIL_APP_PASSWORD)
             smtp.sendmail(ALERT_EMAIL, ALERT_EMAIL, msg.as_string())
         return True
