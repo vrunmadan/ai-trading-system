@@ -178,6 +178,42 @@ def kite_callback():
 
 
 # ---------------------------------------------------------------------------
+# Debug / test endpoints (safe — read-only or one-shot, no side effects in prod)
+# ---------------------------------------------------------------------------
+
+@app.route("/send_test_email", methods=["GET"])
+def send_test_email():
+    """
+    Manually fire the 7:30 AM Kite login email. Useful to verify SMTP works
+    after a config change. Protected by APPROVAL_SECRET so it can't be
+    accidentally spammed by crawlers.
+
+    Usage:
+      https://ai-trading-system-production-6af9.up.railway.app/send_test_email?secret=<APPROVAL_SECRET>
+    """
+    from flask import make_response
+    secret = request.args.get("secret", "")
+    expected = os.getenv("APPROVAL_SECRET", "")
+    if not expected or secret != expected:
+        return make_response(_html_response("Forbidden", "Wrong or missing secret.", False), 403)
+
+    try:
+        from alerts.gmail_alert import send_kite_login_email
+        ok = send_kite_login_email()
+        if ok:
+            return make_response(
+                _html_response("Email sent ✅", "Kite login email dispatched. Check your inbox.", True), 200
+            )
+        else:
+            return make_response(
+                _html_response("Send failed", "send_kite_login_email() returned False. Check Railway logs.", False), 500
+            )
+    except Exception as e:
+        log.error(f"/send_test_email error: {e}", exc_info=True)
+        return make_response(_html_response("Error", str(e), False), 500)
+
+
+# ---------------------------------------------------------------------------
 # Scheduler in background thread
 # ---------------------------------------------------------------------------
 
