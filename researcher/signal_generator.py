@@ -427,7 +427,13 @@ Output your verdict as JSON."""
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": prompt}],
         )
-        raw = msg.content[0].text.strip()
+        # claude-sonnet-5 may prepend a ThinkingBlock before the TextBlock.
+        # Always locate the TextBlock explicitly instead of assuming content[0].
+        text_block = next((b for b in msg.content if b.type == "text"), None)
+        if not text_block:
+            log.error(f"No text block in Claude response for {ind['ticker']}/{strategy['name']}")
+            return None
+        raw = text_block.text.strip()
         # Strip markdown fences if model adds them
         if "```" in raw:
             parts = raw.split("```")
