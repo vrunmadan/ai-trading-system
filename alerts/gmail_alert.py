@@ -30,23 +30,26 @@ import hashlib
 import hmac
 import logging
 import os
-import smtplib
+import requests as _requests
 from datetime import datetime
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 
 import pytz
 
 log = logging.getLogger(__name__)
 IST = pytz.timezone("Asia/Kolkata")
 
-GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD", "")
-ALERT_EMAIL        = os.getenv("ALERT_EMAIL", "")
-RAILWAY_URL        = os.getenv("RAILWAY_URL", "http://localhost:8080").rstrip("/")
-APPROVAL_SECRET    = os.getenv("APPROVAL_SECRET", "change-me-in-dotenv")
+ALERT_EMAIL     = os.getenv("ALERT_EMAIL", "")
+RAILWAY_URL     = os.getenv("RAILWAY_URL", "http://localhost:8080").rstrip("/")
+APPROVAL_SECRET = os.getenv("APPROVAL_SECRET", "change-me-in-dotenv")
 
-SMTP_HOST = "smtp.gmail.com"
-SMTP_PORT = 465   # SSL (port 587/STARTTLS is blocked on Railway)
+# Resend HTTP API — works on Railway (port 443). No SMTP needed.
+# Sign up free at resend.com, copy your API key, set RESEND_API_KEY in Railway.
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
+
+# Resend requires a verified sender address OR allows "onboarding@resend.dev"
+# for testing. Once you add/verify your own domain, change RESEND_FROM below.
+# For now: emails are sent FROM onboarding@resend.dev and TO your ALERT_EMAIL.
+RESEND_FROM = os.getenv("RESEND_FROM", "AI Trading System <onboarding@resend.dev>")
 
 
 # ---------------------------------------------------------------------------
@@ -54,8 +57,11 @@ SMTP_PORT = 465   # SSL (port 587/STARTTLS is blocked on Railway)
 # ---------------------------------------------------------------------------
 
 def _configured() -> bool:
-    if not GMAIL_APP_PASSWORD or not ALERT_EMAIL:
-        log.warning("Gmail not configured — set GMAIL_APP_PASSWORD and ALERT_EMAIL in .env.")
+    if not RESEND_API_KEY or not ALERT_EMAIL:
+        log.warning(
+            "Email not configured — set RESEND_API_KEY and ALERT_EMAIL in Railway vars. "
+            "Get a free Resend key at resend.com."
+        )
         return False
     return True
 
@@ -77,25 +83,39 @@ def _action_url(action: str, signal_id: int) -> str:
 
 
 def _send_email(subject: str, html_body: str, plain_body: str = "") -> bool:
-    """Low-level send. Returns True on success."""
+    """
+    Low-level send via Resend HTTP API (port 443 — not blocked by Railway).
+    Returns True on success.
+    """
     if not _configured():
         return False
     try:
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = subject
-        msg["From"]    = ALERT_EMAIL
-        msg["To"]      = ALERT_EMAIL
-
+        payload = {
+            "from":    RESEND_FROM,
+            "to":      [ALERT_EMAIL],
+            "subject": subject,
+            "html":    html_body,
+        }
         if plain_body:
-            msg.attach(MIMEText(plain_body, "plain"))
-        msg.attach(MIMEText(html_body, "html"))
+            payload["text"] = plain_body
 
-        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT) as smtp:
-            smtp.login(ALERT_EMAIL, GMAIL_APP_PASSWORD)
-            smtp.sendmail(ALERT_EMAIL, ALERT_EMAIL, msg.as_string())
-        return True
+        resp = _requests.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {RESEND_API_KEY}",
+                "Content-Type":  "application/json",
+            },
+            json=payload,
+            timeout=15,
+        )
+        if resp.status_code in (200, 201):
+            log.info(f"Resend: email sent OK (id={resp.json().get('id', '?')})")
+            return True
+        else:
+            log.error(f"Resend API error {resp.status_code}: {resp.text}")
+            return False
     except Exception as e:
-        log.error(f"Gmail send failed: {e}")
+        log.error(f"Resend send failed: {e}")
         return False
 
 
