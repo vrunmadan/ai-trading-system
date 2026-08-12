@@ -109,8 +109,16 @@ def email_action():
     log.info(f"Email action: {action} signal #{signal_id}")
 
     try:
-        message, success = handle_email_action(action, signal_id)
-        title = ("Trade approved" if action == "approve" else "Signal rejected") if success else "Action failed"
+        message, success, kite_url = handle_email_action(action, signal_id)
+
+        # Approve path: redirect straight to Kite's basket order screen.
+        # The user's browser opens Kite with the trade pre-filled; they tap Place Order.
+        if action == "approve" and kite_url and success:
+            from flask import redirect as flask_redirect
+            log.info(f"Redirecting to Kite basket: {kite_url[:80]}...")
+            return flask_redirect(kite_url, code=302)
+
+        title = ("Signal rejected" if action == "reject" else "Action failed") if success else "Action failed"
         html = _html_response(title, message, success)
         return make_response(html, 200 if success else 500)
     except Exception as e:

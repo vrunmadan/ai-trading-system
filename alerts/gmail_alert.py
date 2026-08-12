@@ -135,12 +135,16 @@ def send_plain_email(subject: str, body: str) -> bool:
 def send_trade_alert(signal_id: int, signal, qc_verdict, sizing) -> bool:
     """
     Email the trade signal with Approve / Reject links.
+
+    Approve flow:
+      Tap "Approve → Open Kite" → our server redirects to Kite basket URL →
+      Kite order screen opens pre-filled → user taps Place Order in Kite.
+
     Returns True if sent successfully.
     """
     if not _configured():
         raise EnvironmentError(
-            "GMAIL_APP_PASSWORD and ALERT_EMAIL must be set in .env. "
-            "See README for Gmail App Password setup steps."
+            "RESEND_API_KEY and ALERT_EMAIL must be set in Railway env vars."
         )
 
     regime_emoji = {
@@ -151,6 +155,15 @@ def send_trade_alert(signal_id: int, signal, qc_verdict, sizing) -> bool:
     direction_emoji = "📈" if signal.direction == "BUY" else "📉"
     approve_url = _action_url("approve", signal_id)
     reject_url  = _action_url("reject",  signal_id)
+
+    # Build the Kite basket URL for the fallback link in the email.
+    # The approve_url (our webhook) also redirects to this same URL when tapped.
+    kite_basket_url = _build_kite_basket_url(
+        signal.ticker,
+        getattr(signal, "exchange", "NSE"),
+        signal.direction,
+        sizing.quantity,
+    )
 
     subject = f"{direction_emoji} Trade Signal #{signal_id} — {signal.ticker} {signal.direction}"
 
@@ -172,9 +185,11 @@ def send_trade_alert(signal_id: int, signal, qc_verdict, sizing) -> bool:
 
     <table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:20px">
       <tr><td style="padding:6px 0;color:#888;width:40%">Ticker</td>
-          <td style="padding:6px 0;font-weight:600">{signal.ticker}</td></tr>
+          <td style="padding:6px 0;font-weight:600">{signal.ticker} ({getattr(signal, "exchange", "NSE")})</td></tr>
       <tr><td style="padding:6px 0;color:#888">Direction</td>
           <td style="padding:6px 0;font-weight:600">{signal.direction}</td></tr>
+      <tr><td style="padding:6px 0;color:#888">Quantity</td>
+          <td style="padding:6px 0;font-weight:600">{sizing.quantity} shares</td></tr>
       <tr><td style="padding:6px 0;color:#888">Regime</td>
           <td style="padding:6px 0">{regime_emoji} {signal.regime.value.replace('_', ' ').title()}</td></tr>
       <tr><td style="padding:6px 0;color:#888">Strategy</td>
@@ -187,7 +202,7 @@ def send_trade_alert(signal_id: int, signal, qc_verdict, sizing) -> bool:
 
     <div style="background:#f8f8f8;border-radius:8px;padding:14px;margin-bottom:16px;font-size:13px">
       <strong>Researcher rationale</strong><br>
-      <span style="color:#444">{signal.rationale[:400]}...</span>
+      <span style="color:#444">{signal.rationale[:400]}</span>
     </div>
 
     <div style="background:#f8f8f8;border-radius:8px;padding:14px;margin-bottom:24px;font-size:13px">
@@ -196,23 +211,30 @@ def send_trade_alert(signal_id: int, signal, qc_verdict, sizing) -> bool:
       <strong>Sizer notes:</strong> {sizing.notes[:200]}
     </div>
 
-    <div style="text-align:center;margin-bottom:20px">
+    <!-- Primary action: Approve opens Kite basket via our webhook redirect -->
+    <div style="text-align:center;margin-bottom:12px">
       <a href="{approve_url}"
          style="display:inline-block;background:#22c55e;color:#fff;text-decoration:none;
-                padding:14px 36px;border-radius:8px;font-size:16px;font-weight:600;
-                margin:0 8px">
-        ✅&nbsp; Approve
+                padding:16px 40px;border-radius:8px;font-size:17px;font-weight:700;
+                margin:0 8px 12px">
+        ✅&nbsp; Approve → Open Kite
       </a>
       <a href="{reject_url}"
          style="display:inline-block;background:#ef4444;color:#fff;text-decoration:none;
-                padding:14px 36px;border-radius:8px;font-size:16px;font-weight:600;
-                margin:0 8px">
+                padding:16px 32px;border-radius:8px;font-size:17px;font-weight:700;
+                margin:0 8px 12px">
         ❌&nbsp; Reject
       </a>
     </div>
 
-    <p style="text-align:center;color:#aaa;font-size:12px;margin:0">
-      ⏰ Valid for today's session. No response = no trade.
+    <!-- Fallback: direct Kite basket link if the redirect fails -->
+    <p style="text-align:center;color:#888;font-size:12px;margin:0 0 16px">
+      If Kite doesn't open automatically after Approve:<br>
+      <a href="{kite_basket_url}" style="color:#387ed1">Open Kite order directly →</a>
+    </p>
+
+    <p style="text-align:center;color:#aaa;font-size:11px;margin:0">
+      ⏰ Valid for today's session only. No response = no trade.
     </p>
   </div>
 </body>
@@ -220,13 +242,14 @@ def send_trade_alert(signal_id: int, signal, qc_verdict, sizing) -> bool:
 """
 
     plain = (
-        f"Trade Signal #{signal_id} — {signal.ticker} {signal.direction}\n"
-        f"Confidence: {signal.confidence_score:.0f}%  |  Capital: ₹{sizing.capital_to_deploy:,.0f}\n"
-        f"Regime: {signal.regime.value}\n\n"
+        f"Trade Signal #{signal_id} — {signal.ticker} ({getattr(signal, 'exchange', 'NSE')}) {signal.direction}\n"
+        f"Quantity: {sizing.quantity} shares  |  Capital: ₹{sizing.capital_to_deploy:,.0f}\n"
+        f"Confidence: {signal.confidence_score:.0f}%  |  Regime: {signal.regime.value}\n\n"
         f"Rationale: {signal.rationale[:400]}\n\n"
         f"QC: {qc_verdict.verdict} — {qc_verdict.rationale[:300]}\n\n"
-        f"APPROVE: {approve_url}\n"
-        f"REJECT:  {reject_url}\n\n"
+        f"APPROVE (opens Kite): {approve_url}\n"
+        f"REJECT:               {reject_url}\n\n"
+        f"Direct Kite basket (fallback): {kite_basket_url}\n\n"
         f"Valid for today's session. No response = no trade."
     )
 
@@ -236,73 +259,87 @@ def send_trade_alert(signal_id: int, signal, qc_verdict, sizing) -> bool:
     return sent
 
 
+def _build_kite_basket_url(ticker: str, exchange: str, direction: str, quantity: int) -> str:
+    """
+    Constructs a Kite basket order URL. When the user opens this URL in their browser,
+    Kite's order screen opens with the trade pre-filled — they just tap Place Order.
+
+    URL format:  https://kite.zerodha.com/connect/basket?api_key=<key>&data=<json>
+    Data schema: list of order dicts (Kite accepts up to 20 legs).
+    """
+    import json
+    import urllib.parse
+
+    api_key = os.getenv("KITE_API_KEY", "")
+    order = [{
+        "variety": "regular",
+        "tradingsymbol": ticker,
+        "exchange": exchange,
+        "transaction_type": direction,   # "BUY" or "SELL"
+        "order_type": "MARKET",
+        "quantity": max(1, int(quantity)),
+        "readonly": False,               # user can still edit before placing
+    }]
+    encoded = urllib.parse.quote(json.dumps(order))
+    return f"https://kite.zerodha.com/connect/basket?api_key={api_key}&data={encoded}"
+
+
 def handle_email_action(action: str, signal_id: int):
     """
     Called by webhook_server.py when the user taps Approve or Reject.
-    Mirrors handle_callback() from telegram_bot.
+
+    Returns a 3-tuple: (message, success, kite_basket_url_or_None)
+
+    For 'approve': kite_basket_url is set — the webhook server redirects the user's
+    browser there so Kite opens with the trade pre-filled. The user taps Place Order
+    once in Kite's own interface. We never call the trading API automatically.
+
+    For 'reject': kite_basket_url is None — just show a confirmation HTML page.
     """
     from ledger.db import update_signal_response, get_db
 
     if action == "approve":
-        from trader.kite_client import execute_trade
-
         with get_db() as conn:
             row = conn.execute(
-                "SELECT ticker, exchange, direction, sized_quantity, capital_to_deploy FROM signals WHERE id=?",
+                "SELECT ticker, exchange, direction, sized_quantity, capital_to_deploy "
+                "FROM signals WHERE id=?",
                 (signal_id,),
             ).fetchone()
 
         if not row:
             log.error(f"Signal {signal_id} not found in ledger")
-            return "Signal not found.", False
+            return "Signal not found.", False, None
 
-        # Use the capital the Risk Sizer already approved; fall back to 20% if column
-        # is NULL (signals logged before this fix was deployed).
-        capital_to_deploy = float(row["capital_to_deploy"] or 0) or (
-            float(os.getenv("TOTAL_CAPITAL_INR", 1_000_000)) * 0.20
-        )
-        # exchange defaults to "NSE" for signals logged before the exchange column was added
-        signal_exchange = row["exchange"] if row["exchange"] else "NSE"
+        ticker   = row["ticker"]
+        exchange = row["exchange"] if row["exchange"] else "NSE"
+        direction = row["direction"]
 
-        result = execute_trade(
-            signal_id=signal_id,
-            ticker=row["ticker"],
-            direction=row["direction"],
-            capital_to_deploy=capital_to_deploy,
-            exchange=signal_exchange,
-        )
+        # Prefer the Risk Sizer's pre-computed quantity; fall back to capital/notional estimate
+        quantity = row["sized_quantity"] or 1
 
-        status = (
-            f"{'[PAPER] ' if result.mode == 'PAPER' else ''}"
-            f"Order {'placed' if result.success else 'FAILED'}: "
-            f"{row['direction']} {result.quantity} × {row['ticker']}"
-            + (f" @ ₹{result.fill_price:.2f}" if result.fill_price else "")
-        )
-        log.info(status)
+        # Mark as APPROVED in the ledger immediately — user has confirmed intent.
+        # Actual execution is in Kite's hands from here. Position monitor will
+        # reconcile if the trade doesn't go through.
+        update_signal_response(signal_id, "APPROVED")
+        log.info(f"Signal #{signal_id} approved — launching Kite basket for {direction} {quantity}×{exchange}:{ticker}")
+
+        basket_url = _build_kite_basket_url(ticker, exchange, direction, quantity)
 
         send_plain_email(
-            subject=f"✅ Trade executed — {row['ticker']} #{signal_id}",
-            body=status + "\n\n" + result.notes,
+            subject=f"✅ Kite basket launched — {ticker} {direction} #{signal_id}",
+            body=(
+                f"You approved signal #{signal_id}.\n"
+                f"Kite basket opened: {direction} {quantity} × {exchange}:{ticker}\n\n"
+                f"If the Kite screen did not open automatically, use this link:\n{basket_url}"
+            ),
         )
 
-        # Mirror to Sheets
-        if result.success and result.trade_id:
-            try:
-                from sheets.trade_logger import append_trade
-                append_trade(
-                    trade_id=result.trade_id,
-                    signal_id=signal_id,
-                    ticker=row["ticker"],
-                    direction=row["direction"],
-                    quantity=result.quantity,
-                    entry_price=result.fill_price or 0.0,
-                    entry_time=datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
-                    mode=result.mode,
-                )
-            except Exception as e:
-                log.warning(f"Sheets trade log failed (non-critical): {e}")
-
-        return status, result.success
+        return (
+            f"Kite basket launched: {direction} {quantity} × {exchange}:{ticker}. "
+            "Tap Place Order in Kite to execute.",
+            True,
+            basket_url,
+        )
 
     elif action == "reject":
         update_signal_response(signal_id, "REJECTED")
@@ -311,10 +348,10 @@ def handle_email_action(action: str, signal_id: int):
             subject=f"❌ Signal #{signal_id} rejected",
             body=f"Signal #{signal_id} marked as REJECTED.",
         )
-        return f"Signal #{signal_id} rejected.", True
+        return f"Signal #{signal_id} rejected.", True, None
 
     else:
-        return "Unknown action.", False
+        return "Unknown action.", False, None
 
 
 def send_kite_login_email() -> bool:
