@@ -267,6 +267,52 @@ def diagnose_universe():
 
 
 # ---------------------------------------------------------------------------
+# Universe refresh — manual trigger endpoint
+# ---------------------------------------------------------------------------
+
+@app.route("/refresh_universe", methods=["GET"])
+def refresh_universe():
+    """
+    Runs the full Screener.in discovery + validation job on demand.
+    Same job as the Sunday 8pm IST scheduler, just triggered manually.
+
+    Returns an HTML report inline (no email — you're already looking at it).
+
+    Usage:
+      https://ai-trading-system-production-6af9.up.railway.app/refresh_universe?secret=<APPROVAL_SECRET>
+    """
+    from flask import make_response
+
+    secret = request.args.get("secret", "")
+    expected = os.getenv("APPROVAL_SECRET", "")
+    if not expected or secret != expected:
+        return make_response(_html_response("Forbidden", "Wrong or missing secret.", False), 403)
+
+    try:
+        from universe.screener_client import build_client_from_env
+        from universe.universe_refresher import run_universe_refresh, format_html_report
+
+        client  = build_client_from_env()
+        results = run_universe_refresh(screener_client=client)
+        html    = format_html_report(results)
+        return make_response(html, 200)
+
+    except EnvironmentError as e:
+        # Missing SCREENER_EMAIL / SCREENER_PASSWORD
+        return make_response(
+            _html_response(
+                "Screener not configured",
+                str(e) + " Set SCREENER_EMAIL and SCREENER_PASSWORD in Railway → Variables.",
+                False,
+            ),
+            503,
+        )
+    except Exception as e:
+        log.error(f"/refresh_universe error: {e}", exc_info=True)
+        return make_response(_html_response("Error", str(e), False), 500)
+
+
+# ---------------------------------------------------------------------------
 # Scheduler in background thread
 # ---------------------------------------------------------------------------
 
@@ -319,6 +365,16 @@ def _start_scheduler():
             name="Weekly Gemini audit",
         )
 
+        # Universe refresh + discovery: Sunday 20:00 IST
+        # Runs a fundamental screen across ALL ~5000+ listed NSE+BSE stocks,
+        # surfaces new candidates and flags degraded universe stocks.
+        scheduler.add_job(
+            func=_safe_run_universe_refresh,
+            trigger=CronTrigger(day_of_week="sun", hour=20, minute=0, timezone=IST),
+            id="universe_refresh",
+            name="Weekly universe discovery (Screener.in)",
+        )
+
         scheduler.start()
         log.info("Scheduler started. Jobs: research cycle × 7/day, EOD, weekly audit.")
         return scheduler
@@ -359,6 +415,14 @@ def _safe_run_audit():
         run_weekly_audit()
     except Exception as e:
         log.error(f"Weekly audit error: {e}", exc_info=True)
+
+
+def _safe_run_universe_refresh():
+    try:
+        from universe.universe_refresher import run_and_email
+        run_and_email()
+    except Exception as e:
+        log.error(f"Universe refresh error: {e}", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
