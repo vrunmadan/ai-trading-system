@@ -214,6 +214,51 @@ def send_test_email():
 
 
 # ---------------------------------------------------------------------------
+# Universe diagnostic endpoint — checks CSV vs Kite live instrument list
+# ---------------------------------------------------------------------------
+
+@app.route("/diagnose_universe", methods=["GET"])
+def diagnose_universe():
+    """
+    Compares universe.csv tickers against live NSE + BSE instruments from Kite.
+    Returns an HTML report showing which stocks match, which are BSE-only,
+    which have possible symbol corrections, and which aren't found anywhere.
+
+    Requires a valid Kite access token (captured from today's morning login).
+    Usage: https://ai-trading-system-production-6af9.up.railway.app/diagnose_universe?secret=<APPROVAL_SECRET>
+    """
+    from flask import make_response
+
+    secret = request.args.get("secret", "")
+    expected = os.getenv("APPROVAL_SECRET", "")
+    if not expected or secret != expected:
+        return make_response(_html_response("Forbidden", "Wrong or missing secret.", False), 403)
+
+    try:
+        from kiteconnect import KiteConnect
+        from ledger.db import get_kite_token
+        from universe.diagnose_universe import run_diagnosis, format_html_report
+
+        api_key = os.getenv("KITE_API_KEY")
+        access_token = get_kite_token()
+        if not access_token:
+            return make_response(
+                _html_response("No token", "No Kite access token found. Complete today's morning login first.", False), 503
+            )
+
+        kite = KiteConnect(api_key=api_key)
+        kite.set_access_token(access_token)
+
+        results = run_diagnosis(kite=kite)
+        html = format_html_report(results)
+        return make_response(html, 200)
+
+    except Exception as e:
+        log.error(f"/diagnose_universe error: {e}", exc_info=True)
+        return make_response(_html_response("Error", str(e), False), 500)
+
+
+# ---------------------------------------------------------------------------
 # Scheduler in background thread
 # ---------------------------------------------------------------------------
 
