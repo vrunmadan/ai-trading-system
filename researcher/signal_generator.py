@@ -486,7 +486,7 @@ def generate_signal(regime_reading: RegimeReading) -> Optional[TradeSignal]:
         instruments_map = {
             row["tradingsymbol"]: row["instrument_token"]
             for row in kite.instruments("NSE")
-            if row["instrument_type"] == "EQ"
+            if row["instrument_type"] in ("EQ", "BE")  # BE = Trade-to-Trade/T2T segment
         }
     except Exception as e:
         log.error(f"Could not fetch instruments list: {e}")
