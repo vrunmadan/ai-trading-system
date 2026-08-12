@@ -39,6 +39,7 @@ MIN_CONFIDENCE = float(os.getenv("MIN_SIGNAL_CONFIDENCE", "75"))
 class TradeSignal:
     ticker: str
     sector: str            # from universe CSV (for Risk Sizer sector check)
+    exchange: str          # "NSE" or "BSE" — which exchange to route order to
     regime: Regime
     strategy_bucket: str
     direction: str         # "BUY" (system only does longs currently)
@@ -472,25 +473,48 @@ def generate_signal(regime_reading: RegimeReading) -> Optional[TradeSignal]:
 
     kite = get_kite_client()
 
-    # Load universe with sector info (needed for Risk Sizer sector check)
+    # Load universe with sector + exchange info
     universe_entries = load_universe()
     sector_map = {e.ticker: e.sector for e in universe_entries}
+    exchange_map = {e.ticker: e.exchange for e in universe_entries}
     tickers = [e.ticker for e in universe_entries]
 
     if not tickers:
         log.warning("Universe CSV is empty — nothing to scan.")
         return None
 
-    # Fetch instruments list once; reuse for all tickers
+    # Build combined NSE+BSE instruments map.
+    # BSE is fetched first so NSE takes precedence for dual-listed stocks
+    # (most liquid venue is NSE for those names).
     try:
-        instruments_map = {
-            row["tradingsymbol"]: row["instrument_token"]
-            for row in kite.instruments("NSE")
+        bse_rows = kite.instruments("BSE")
+        bse_map = {
+            row["tradingsymbol"]: {"token": row["instrument_token"], "exchange": "BSE"}
+            for row in bse_rows
+            if row["instrument_type"] in ("EQ", "BE")
+        }
+        log.info(f"BSE instruments loaded: {len(bse_map)} EQ/BE symbols")
+    except Exception as e:
+        log.warning(f"Could not fetch BSE instruments (BSE stocks will be skipped): {e}")
+        bse_map = {}
+
+    try:
+        nse_rows = kite.instruments("NSE")
+        nse_map = {
+            row["tradingsymbol"]: {"token": row["instrument_token"], "exchange": "NSE"}
+            for row in nse_rows
             if row["instrument_type"] in ("EQ", "BE")  # BE = Trade-to-Trade/T2T segment
         }
+        log.info(f"NSE instruments loaded: {len(nse_map)} EQ/BE symbols")
     except Exception as e:
-        log.error(f"Could not fetch instruments list: {e}")
-        instruments_map = {}
+        log.error(f"Could not fetch NSE instruments: {e}")
+        nse_map = {}
+
+    # Merge: NSE overrides BSE for dual-listed names
+    instruments_map = {**bse_map, **nse_map}
+    if not instruments_map:
+        log.error("No instruments loaded from either exchange — aborting cycle.")
+        return None
 
     from_date = (date.today() - timedelta(days=420)).strftime("%Y-%m-%d")
     to_date = date.today().strftime("%Y-%m-%d")
@@ -499,10 +523,15 @@ def generate_signal(regime_reading: RegimeReading) -> Optional[TradeSignal]:
     best_confidence = 0.0
 
     for ticker in tickers:
-        token = instruments_map.get(ticker)
-        if not token:
-            log.warning(f"No instrument token for {ticker} — skipping")
+        info = instruments_map.get(ticker)
+        if not info:
+            log.warning(f"No instrument token for {ticker} on NSE or BSE — skipping")
             continue
+
+        token = info["token"]
+        # Use exchange from instruments_map (what Kite actually has) but respect
+        # the CSV exchange hint for BSE-only stocks not on NSE.
+        resolved_exchange = info["exchange"]
 
         # Fetch OHLCV history
         try:
@@ -512,7 +541,7 @@ def generate_signal(regime_reading: RegimeReading) -> Optional[TradeSignal]:
                 continue
             indicators = _compute_indicators(hist, ticker)
         except Exception as e:
-            log.error(f"History fetch failed for {ticker}: {e}")
+            log.error(f"History fetch failed for {ticker} ({resolved_exchange}): {e}")
             continue
 
         # Fetch qualitative context once per ticker (shared across strategies)
@@ -524,7 +553,7 @@ def generate_signal(regime_reading: RegimeReading) -> Optional[TradeSignal]:
 
         # Evaluate each strategy in the basket
         for strategy in baskets:
-            log.debug(f"Evaluating {ticker} / {strategy['name']}")
+            log.debug(f"Evaluating {ticker} ({resolved_exchange}) / {strategy['name']}")
             verdict = _call_claude(regime, strategy, indicators, qual_context=qual_context)
             if not verdict:
                 continue
@@ -539,7 +568,7 @@ def generate_signal(regime_reading: RegimeReading) -> Optional[TradeSignal]:
                 continue
 
             log.info(
-                f"Candidate: {ticker} / {strategy['name']} "
+                f"Candidate: {ticker} ({resolved_exchange}) / {strategy['name']} "
                 f"— confidence {confidence:.0f}% | "
                 f"tech {verdict.get('technical_score', 0):.0f} / "
                 f"fund {verdict.get('fundamental_score', 0):.0f}"
@@ -550,6 +579,7 @@ def generate_signal(regime_reading: RegimeReading) -> Optional[TradeSignal]:
                 best_signal = TradeSignal(
                     ticker=ticker,
                     sector=sector_map.get(ticker, "Unknown"),
+                    exchange=resolved_exchange,
                     regime=regime,
                     strategy_bucket=strategy["name"],
                     direction="BUY",

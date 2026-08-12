@@ -30,10 +30,11 @@ UNIVERSE_CSV_PATH = os.path.join(os.path.dirname(__file__), "universe.csv")
 
 @dataclass
 class UniverseEntry:
-    ticker: str          # NSE symbol, e.g. "DIXON"
+    ticker: str          # Trading symbol (NSE or BSE), e.g. "DIXON"
     company_name: str
     sector: str
     market_cap_cr: float
+    exchange: str        # "NSE" or "BSE" — which exchange to trade on
     notes: str           # optional human annotation
 
 
@@ -58,6 +59,7 @@ def load_universe() -> list[UniverseEntry]:
                 company_name=row.get("Company", row.get("Name", "")).strip(),
                 sector=row.get("Sector", "").strip(),
                 market_cap_cr=float(row.get("Market Cap", 0) or 0),
+                exchange=row.get("Exchange", "NSE").strip().upper() or "NSE",
                 notes=row.get("Notes", "").strip(),
             ))
 

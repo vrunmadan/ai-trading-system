@@ -248,7 +248,7 @@ def handle_email_action(action: str, signal_id: int):
 
         with get_db() as conn:
             row = conn.execute(
-                "SELECT ticker, direction, sized_quantity, capital_to_deploy FROM signals WHERE id=?",
+                "SELECT ticker, exchange, direction, sized_quantity, capital_to_deploy FROM signals WHERE id=?",
                 (signal_id,),
             ).fetchone()
 
@@ -261,12 +261,15 @@ def handle_email_action(action: str, signal_id: int):
         capital_to_deploy = float(row["capital_to_deploy"] or 0) or (
             float(os.getenv("TOTAL_CAPITAL_INR", 1_000_000)) * 0.20
         )
+        # exchange defaults to "NSE" for signals logged before the exchange column was added
+        signal_exchange = row["exchange"] if row["exchange"] else "NSE"
 
         result = execute_trade(
             signal_id=signal_id,
             ticker=row["ticker"],
             direction=row["direction"],
             capital_to_deploy=capital_to_deploy,
+            exchange=signal_exchange,
         )
 
         status = (

@@ -1,49 +1,63 @@
-Ticker,Company,Sector,Market Cap,Notes
-TIPSMUSIC,Tips Music,Media,8252,Content library moat. ROCE 122%. Asset-light. High cash generation.
-WAAREERTL,Waaree Renewable Technologies,Energy,9477,Solar EPC. High growth. NSE: WAAREERTL (was WAAREERENEW in CSV - corrected).
-JSLL,Jeena Sikho Lifecare,Healthcare,7433,Ayurvedic/wellness. High ROCE 70%. Watch for regulatory risk.
-VIVIDEL,Vivid Electromech,Capital Goods,1287,Electrical systems. Watch liquidity - small cap. NSE: VIVIDEL (was VIVIDMERCANT).
-SHILCTECH,Shilchar Technologies,Capital Goods,5295,Transformers. High ROCE 50%. Quarterly numbers volatile - verify trend.
-SAHANA,Sahana Systems,IT Services,861,High growth. Very small - watch liquidity carefully. NSE SME - may migrate to main board.
-MPSLTD,MPS Ltd,Media,5000,Publishing services. Consistent compounder. Good dividend yield.
-SRM,SRM Contractors,Construction,1196,Recent IPO. High growth but small. Verify promoter quality.
-WEALTH,Wealth First Portfolio,Financial Services,955,Wealth management. Erratic quarterly (606% var) - watch.
-PRECWIRE,Precision Wires India,Capital Goods,7554,Winding wires. High sales growth 67% QoQ - verify if sustainable.
-CORONA,Corona Remedies,Pharma,12589,Branded generics. ROCE 33%. High PE 59x. NSE: CORONA (was CORONARE - listed Dec 2025).
-BANCOINDIA,Banco Products,Auto Components,9806,Auto sealing. Consistent. ROCE 30%. Decent dividend yield.
-ARROWGREEN,Arrow Greentech,Consumer,1169,Specialty films/packaging. Quarterly numbers weakening. Symbol correct - verify if in T2T segment.
-SHAILY,Shaily Engineering Plastics,Plastics,14529,Plastic components. High PE 90x. Strong growth. Watch valuation.
-FIEMIND,Fiem Industries,Auto Components,6792,Auto lighting. ROCE 29%. Consistent growth. Decent dividend yield.
-MACPOWER,Macpower CNC Machines,Capital Goods,1682,CNC machines. Capex cycle beneficiary. High quarterly growth.
-INDIAMART,Indiamart Intermesh,Internet,10560,B2B marketplace. Strong moat. Sticky SME subscribers. Capital-light.
-ADVAIT,Advait Energy Transitions,Capital Goods,2400,Power cables and conductors. Symbol ADVAIT confirmed on NSE.
-SYNCOMF,Syncom Formulations India,Pharma,1263,Very low CMP (Rs13). Penny stock risk. Verify promoter quality.
-DISAQ,Disa India,Capital Goods,1739,Foundry equipment. Consistent. German parent (Norican). ROCE 26%. NSE: DISAQ (was DISA).
-BORORENEW,Borosil Renewables,Energy,7795,Solar glass duopoly India. Capex cycle. High quarterly growth 156%.
-DYCL,Dynamic Cables,Capital Goods,1961,Power cables. Growth from infra push. Small cap. NSE: DYCL (was DYNCABLES).
-3BBLACKBIO,3B Blackbio Dx,Healthcare,1038,Diagnostics. Post-COVID normalization. Watch growth trend.
-SUPRIYA,Supriya Lifescience,Pharma,7435,API manufacturer. ROCE 25%. US and domestic markets. Watch FDA risk.
-NEWGEN,Newgen Software Technologies,IT,7854,BPM/low-code platform. Recurring revenue. Consistent growth. Good moat.
-ACCENTMIC,Accent Microcell,Pharma,1305,Excipients for pharma. Niche. Small cap. NSE: ACCENTMIC (was ACCENTMICR).
-RAJOOENG,Rajoo Engineers,Capital Goods,925,Plastics processing machinery. Exporter. Consistent ROCE. NSE: RAJOOENG (was RAJOO).
-SANDUMA,Sandur Manganese and Iron Ores,Metals,10022,Manganese mining. Steel inputs. High quarterly profits. Commodity exposure.
-GOLDIAM,Goldiam International,Jewellery,5617,Diamond jewellery exporter. US market. ROCE 23%. Watch FX and demand risk.
-SHAKTIPUMP,Shakti Pumps India,Capital Goods,6375,Solar pumps PM-KUSUM scheme. High growth. NSE: SHAKTIPUMP (was SHAKTIPUMPS - typo fixed).
-RAILTEL,Railtel Corporation of India,Telecom,9265,Railway PSU. Telecom infra. Consistent cash flows. Govt ownership risk.
-BALUFORGE,Balu Forge Industries,Auto Components,5687,Recent IPO. Auto forgings. High growth from low base.
-PREMEXPLN,Premier Explosives,Defence,3445,Mining explosives and defence. ROCE 22%. High PE 69x. Government orders. NSE: PREMEXPLN (was PREMEXPLOSIVES).
-KOVAI,Kovai Medical Center and Hospital,Healthcare,6404,South India hospital chain. Consistent. ROCE 22%. Steady growth. NSE: KOVAI (was KOVAIMEDICAL).
-VENUSPIPES,Venus Pipes and Tubes,Metals,3327,Stainless steel pipes. ROCE 22%. Export-led. Watch commodity margins.
-TINNARUBR,Tinna Rubber and Infrastructure,Industrials,2001,Tyre recycling/crumb rubber. Niche. NSE: TINNARUBR (was TINNARA).
-TPLPLASTEH,TPL Plastech,Plastics,598,Very small. Packaging. Liquidity risk. NSE: TPLPLASTEH (was TPLPLASTECH - typo fixed).
-NDRAUTO,NDR Auto Components,Auto Components,1977,Recent IPO. Auto parts. Watch promoter track record.
-JARO,Jaro Education,Education,1021,Ed-tech/executive education. Watch post-COVID growth normalization.
-POWERMECH,Power Mech Projects,Construction,8275,Power plant O&M and EPC. Consistent. ROCE 21%. Order book driven.
-VESUVIUS,Vesuvius India,Capital Goods,9133,Refractory products. UK parent. Consistent ROCE. Niche steel sector play.
-OLECTRA,Olectra Greentech,Auto,11352,Electric buses. ROCE 21%. Quarterly profit 164% growth. Watch execution.
-BHARATSE,Bharat Seats,Auto Components,1510,Auto seating - Maruti supplier. Small. Consistent.
-SEAMECLTD,SEAMEC Ltd,Industrials,3870,Offshore support vessels. Consistent cash. ROCE 20%. Cyclical risk. NSE: SEAMECLTD (was SEAMEC).
-SOUTHWEST,South West Pinnacle Exploration,Oil and Gas,756,Oilfield services. Small. Verify liquidity.
-ACGL,Automobile Corporation of Goa,Auto,1114,Tata subsidiary. Bus bodies. Quarterly numbers volatile. NSE: ACGL (was AUTOCORPGOA).
-BLS,BLS International Services,Financial Services,10479,Visa outsourcing. Capital-light moat. High ROCE. Government contract risk. NSE: BLS (was BLSINFO).
-KRISHNADEF,Krishna Defence,Defence,1766,Defence components. High growth. Watch order concentration. NSE: KRISHNADEF (was KRISHNADEFENCE).
+Ticker,Company,Sector,Market Cap,Exchange,Notes
+TIPSMUSIC,Tips Music,Media,8252,NSE,Content library moat. ROCE 122%. Asset-light. High cash generation.
+WAAREERTL,Waaree Renewable Technologies,Energy,9477,NSE,Solar EPC. High growth.
+JSLL,Jeena Sikho Lifecare,Healthcare,7433,NSE,Ayurvedic/wellness. High ROCE 70%. Watch for regulatory risk.
+VIVIDEL,Vivid Electromech,Capital Goods,1287,NSE,Electrical systems. Watch liquidity - small cap.
+SHILCTECH,Shilchar Technologies,Capital Goods,5295,NSE,Transformers. High ROCE 50%. Quarterly numbers volatile.
+SAHANA,Sahana Systems,IT Services,861,NSE,High growth. Very small - watch liquidity. NSE SME migrating to main board Jul 2026.
+MPSLTD,MPS Ltd,Media,5000,NSE,Publishing services. Consistent compounder. Good dividend yield.
+SRM,SRM Contractors,Construction,1196,NSE,Recent IPO. High growth but small. Verify promoter quality.
+WEALTH,Wealth First Portfolio,Financial Services,955,NSE,Wealth management. Erratic quarterly - watch.
+PRECWIRE,Precision Wires India,Capital Goods,7554,NSE,Winding wires. High sales growth 67% QoQ - verify if sustainable.
+CORONA,Corona Remedies,Pharma,12589,NSE,Branded generics. ROCE 33%. Listed Dec 2025.
+BANCOINDIA,Banco Products,Auto Components,9806,NSE,Auto sealing. Consistent. ROCE 30%. Decent dividend yield.
+ARROWGREEN,Arrow Greentech,Consumer,1169,NSE,Specialty films/packaging. Quarterly numbers weakening.
+SHAILY,Shaily Engineering Plastics,Plastics,14529,NSE,Plastic components. High PE 90x. Strong growth. Watch valuation.
+FIEMIND,Fiem Industries,Auto Components,6792,NSE,Auto lighting. ROCE 29%. Consistent growth. Decent dividend yield.
+MACPOWER,Macpower CNC Machines,Capital Goods,1682,NSE,CNC machines. Capex cycle beneficiary. High quarterly growth.
+INDIAMART,Indiamart Intermesh,Internet,10560,NSE,B2B marketplace. Strong moat. Sticky SME subscribers. Capital-light.
+ADVAIT,Advait Energy Transitions,Capital Goods,2400,NSE,Power cables and conductors.
+SYNCOMF,Syncom Formulations India,Pharma,1263,NSE,Very low CMP (Rs13). Penny stock risk. Verify promoter quality.
+DISAQ,Disa India,Capital Goods,1739,NSE,Foundry equipment. Consistent. German parent (Norican). ROCE 26%.
+BORORENEW,Borosil Renewables,Energy,7795,NSE,Solar glass duopoly India. Capex cycle. High quarterly growth 156%.
+DYCL,Dynamic Cables,Capital Goods,1961,NSE,Power cables. Growth from infra push. Small cap.
+3BBLACKBIO,3B Blackbio Dx,Healthcare,1038,NSE,Diagnostics. Post-COVID normalization. Watch growth trend.
+SUPRIYA,Supriya Lifescience,Pharma,7435,NSE,API manufacturer. ROCE 25%. US and domestic markets. Watch FDA risk.
+NEWGEN,Newgen Software Technologies,IT,7854,NSE,BPM/low-code platform. Recurring revenue. Consistent growth. Good moat.
+ACCENTMIC,Accent Microcell,Pharma,1305,NSE,Excipients for pharma. Niche. Small cap.
+RAJOOENG,Rajoo Engineers,Capital Goods,925,NSE,Plastics processing machinery. Exporter. Consistent ROCE.
+SANDUMA,Sandur Manganese and Iron Ores,Metals,10022,NSE,Manganese mining. Steel inputs. High quarterly profits. Commodity exposure.
+GOLDIAM,Goldiam International,Jewellery,5617,NSE,Diamond jewellery exporter. US market. ROCE 23%. Watch FX and demand risk.
+SHAKTIPUMP,Shakti Pumps India,Capital Goods,6375,NSE,Solar pumps PM-KUSUM scheme. High growth.
+RAILTEL,Railtel Corporation of India,Telecom,9265,NSE,Railway PSU. Telecom infra. Consistent cash flows. Govt ownership risk.
+BALUFORGE,Balu Forge Industries,Auto Components,5687,NSE,Recent IPO. Auto forgings. High growth from low base.
+PREMEXPLN,Premier Explosives,Defence,3445,NSE,Mining explosives and defence. ROCE 22%. High PE 69x. Government orders.
+KOVAI,Kovai Medical Center and Hospital,Healthcare,6404,NSE,South India hospital chain. Consistent. ROCE 22%. Steady growth.
+VENUSPIPES,Venus Pipes and Tubes,Metals,3327,NSE,Stainless steel pipes. ROCE 22%. Export-led. Watch commodity margins.
+TINNARUBR,Tinna Rubber and Infrastructure,Industrials,2001,NSE,Tyre recycling/crumb rubber. Niche.
+TPLPLASTEH,TPL Plastech,Plastics,598,NSE,Very small. Packaging. Liquidity risk.
+NDRAUTO,NDR Auto Components,Auto Components,1977,NSE,Recent IPO. Auto parts. Watch promoter track record.
+JARO,Jaro Education,Education,1021,NSE,Ed-tech/executive education. Watch post-COVID growth normalization.
+POWERMECH,Power Mech Projects,Construction,8275,NSE,Power plant O&M and EPC. Consistent. ROCE 21%. Order book driven.
+VESUVIUS,Vesuvius India,Capital Goods,9133,NSE,Refractory products. UK parent. Consistent ROCE. Niche steel sector play.
+OLECTRA,Olectra Greentech,Auto,11352,NSE,Electric buses. ROCE 21%. Quarterly profit 164% growth. Watch execution.
+BHARATSE,Bharat Seats,Auto Components,1510,NSE,Auto seating - Maruti supplier. Small. Consistent.
+SEAMECLTD,SEAMEC Ltd,Industrials,3870,NSE,Offshore support vessels. Consistent cash. ROCE 20%. Cyclical risk.
+SOUTHWEST,South West Pinnacle Exploration,Oil and Gas,756,NSE,Oilfield services. Small. Verify liquidity.
+ACGL,Automobile Corporation of Goa,Auto,1114,NSE,Tata subsidiary. Bus bodies. Quarterly numbers volatile.
+BLS,BLS International Services,Financial Services,10479,NSE,Visa outsourcing. Capital-light moat. High ROCE. Government contract risk.
+KRISHNADEF,Krishna Defence,Defence,1766,NSE,Defence components. High growth. Watch order concentration.
+BONDADA,Bondada Engineering,Capital Goods,3313,BSE,Power infra EPC. High growth. Watch order book execution risk.
+FRONTSPRING,Frontier Springs,Auto Components,1660,BSE,Springs manufacturer. ROCE 50%+. Watch volumes.
+SIKAINT,Sika Interplant Systems,Capital Goods,2335,BSE,High PE 66x. Niche aerospace/defence components.
+PNGSGARGI,PNGS Gargi Fashion Jewellery,Consumer,628,BSE,Recent IPO. Very small. High liquidity risk.
+NEETUYOSHI,Neetu Yoshi,Capital Goods,635,BSE,Very small. Foundry/railway components. Verify liquidity before trading.
+KALYANICAST,Kalyani Cast-Tech,Auto Components,550,BSE,Very small cap. Auto castings. Verify liquidity.
+ECORECYCL,Eco Recycling,Industrials,962,BSE,E-waste recycling. Niche. Very small - liquidity risk.
+CAPTAINTECH,Captain Technoplast,Plastics,617,BSE,Very small. Packaging. Liquidity risk.
+AMAL,Amal Ltd,Chemicals,924,BSE,Specialty chemicals. Small. ROCE 26%.
+DANLAW,Danlaw Technologies India,IT Services,584,BSE,Auto tech. Small. Verify liquidity before trading.
+KWALITYPHARMA,Kwality Pharmaceuticals,Pharma,2710,BSE,API and formulations. High growth. Verify promoter holding.
+BEMCO,Bemco Hydraulics,Capital Goods,502,BSE,Hydraulic systems. Very small - liquidity risk. Likely skip at runtime.
+ONEGLOBAL,One Global Services,IT Services,1108,BSE,Very high growth - check if sustainable or base effect.
+EXHICON,Exhicon Events and Media,Media,750,BSE,Events company. High growth from low base. Watch moat. NSE migration pending Aug 2026.

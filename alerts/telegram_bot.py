@@ -145,7 +145,7 @@ def handle_callback(callback_data: str, callback_query_id: str):
         # Fetch signal details from ledger and execute
         with get_db() as conn:
             row = conn.execute(
-                "SELECT ticker, direction, sized_quantity FROM signals WHERE id=?",
+                "SELECT ticker, exchange, direction, sized_quantity, capital_to_deploy FROM signals WHERE id=?",
                 (signal_id,),
             ).fetchone()
 
@@ -153,16 +153,17 @@ def handle_callback(callback_data: str, callback_query_id: str):
             log.error(f"Signal {signal_id} not found in ledger")
             return
 
-        # Fetch capital_to_deploy from the sizing stored in notes
-        # (In the real implementation, store capital_to_deploy as a separate column)
-        # TODO: add capital_to_deploy column to signals table
-        capital_to_deploy = float(os.getenv("TOTAL_CAPITAL_INR", 1_000_000)) * 0.20  # fallback
+        capital_to_deploy = float(row["capital_to_deploy"] or 0) or (
+            float(os.getenv("TOTAL_CAPITAL_INR", 1_000_000)) * 0.20
+        )
+        signal_exchange = row["exchange"] if row["exchange"] else "NSE"
 
         result = execute_trade(
             signal_id=signal_id,
             ticker=row["ticker"],
             direction=row["direction"],
             capital_to_deploy=capital_to_deploy,
+            exchange=signal_exchange,
         )
 
         status_text = (

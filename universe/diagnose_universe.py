@@ -44,6 +44,7 @@ def run_diagnosis(kite=None):
                 universe.append({
                     "ticker": row["Ticker"].strip(),
                     "company": row["Company"].strip(),
+                    "exchange": row.get("Exchange", "NSE").strip().upper() or "NSE",
                     "notes": row.get("Notes", "").strip(),
                 })
 
@@ -85,6 +86,7 @@ def run_diagnosis(kite=None):
     for stock in universe:
         ticker = stock["ticker"]
         company = stock["company"]
+        csv_exchange = stock.get("exchange", "NSE")
 
         if ticker in nse_eq:
             info = nse_eq[ticker]
@@ -93,18 +95,25 @@ def run_diagnosis(kite=None):
                 "company": company,
                 "name": info["name"],
                 "instrument_token": info["instrument_token"],
+                "exchange": "NSE",
             })
             continue
 
         # Not in NSE — check BSE
         if ticker in bse_eq:
             bse_info = bse_eq[ticker]
+            note = (
+                "✅ Exchange=BSE in CSV — will be traded on BSE."
+                if csv_exchange == "BSE"
+                else "⚠️ Found in BSE but CSV says NSE — check Exchange column."
+            )
             results["found_bse_only"].append({
                 "ticker": ticker,
                 "company": company,
                 "bse_name": bse_info["name"],
                 "bse_token": bse_info["instrument_token"],
-                "note": "Listed on BSE; code fetches NSE only. Switch to BSE or find NSE symbol.",
+                "csv_exchange": csv_exchange,
+                "note": note,
             })
             continue
 
@@ -236,10 +245,10 @@ def format_html_report(results):
 {''.join(f"<tr><td><b>{s['ticker']}</b></td><td>{s['name']}</td><td>{s['instrument_token']}</td></tr>" for s in results['matched_nse'])}
 </table>
 
-<h2>⚠️ Found in BSE only — skipped every cycle (code only checks NSE)</h2>
+<h2>⚠️ Found in BSE only — check Exchange column in CSV</h2>
 <table>
-<tr><th>CSV Ticker</th><th>Company</th><th>BSE Name</th><th>Action needed</th></tr>
-{''.join(f"<tr><td><b>{s['ticker']}</b></td><td>{s['company']}</td><td>{s['bse_name']}</td><td>Add BSE exchange support or find NSE symbol</td></tr>" for s in results['found_bse_only'])}
+<tr><th>CSV Ticker</th><th>Company</th><th>BSE Name</th><th>CSV Exchange</th><th>Status</th></tr>
+{''.join(f"<tr><td><b>{s['ticker']}</b></td><td>{s['company']}</td><td>{s['bse_name']}</td><td>{s.get('csv_exchange','?')}</td><td>{s['note']}</td></tr>" for s in results['found_bse_only'])}
 </table>
 
 <h2>🔍 Symbol not in NSE or BSE — possible corrections</h2>

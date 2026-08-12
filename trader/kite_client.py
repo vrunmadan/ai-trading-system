@@ -77,31 +77,36 @@ def get_kite_client():
     return kite
 
 
-def get_ltp(ticker: str) -> float:
-    """Fetch last traded price from Kite."""
+def get_ltp(ticker: str, exchange: str = "NSE") -> float:
+    """Fetch last traded price from Kite. Works for both NSE and BSE."""
     kite = get_kite_client()
-    quote = kite.ltp(f"NSE:{ticker}")
-    return quote[f"NSE:{ticker}"]["last_price"]
+    key = f"{exchange}:{ticker}"
+    quote = kite.ltp(key)
+    return quote[key]["last_price"]
 
 
-def _get_instrument_token(kite, ticker: str) -> int | None:
+def _get_instrument_token(kite, ticker: str, exchange: str = "NSE") -> int | None:
     """
-    Returns the NSE instrument token for a ticker, using a module-level cache.
-    The full instruments list (~1800 rows) is fetched once per session and cached.
-    Returns None if the ticker is not found (bad symbol, or not on NSE).
+    Returns the instrument token for a ticker on the given exchange, using a
+    module-level cache. The full instruments list is fetched once per session.
+    Returns None if the ticker is not found.
     """
     global _instrument_token_cache
+    cache_key = f"{exchange}:{ticker}"
     if not _instrument_token_cache:
-        log.info("Fetching NSE instrument list for token cache...")
-        instruments = kite.instruments("NSE")
-        _instrument_token_cache = {
-            i["tradingsymbol"]: i["instrument_token"] for i in instruments
-        }
-        log.info(f"Cached {len(_instrument_token_cache)} NSE instruments.")
-    return _instrument_token_cache.get(ticker)
+        log.info("Fetching NSE+BSE instrument list for token cache...")
+        nse_instruments = kite.instruments("NSE")
+        bse_instruments = kite.instruments("BSE")
+        _instrument_token_cache = {}
+        for i in nse_instruments:
+            _instrument_token_cache[f"NSE:{i['tradingsymbol']}"] = i["instrument_token"]
+        for i in bse_instruments:
+            _instrument_token_cache[f"BSE:{i['tradingsymbol']}"] = i["instrument_token"]
+        log.info(f"Cached {len(_instrument_token_cache)} NSE+BSE instruments.")
+    return _instrument_token_cache.get(cache_key)
 
 
-def get_20d_avg_turnover(ticker: str) -> float:
+def get_20d_avg_turnover(ticker: str, exchange: str = "NSE") -> float:
     """
     Returns the 20-trading-day average daily turnover in INR (volume × close).
     Fetches from Kite historical data API (requires ₹500/month plan).
@@ -109,9 +114,9 @@ def get_20d_avg_turnover(ticker: str) -> float:
     """
     try:
         kite = get_kite_client()
-        token = _get_instrument_token(kite, ticker)
+        token = _get_instrument_token(kite, ticker, exchange)
         if token is None:
-            log.warning(f"No instrument token found for {ticker} — check NSE symbol.")
+            log.warning(f"No instrument token found for {exchange}:{ticker} — check symbol.")
             return 0.0
 
         to_date = datetime.now()
@@ -132,22 +137,23 @@ def get_20d_avg_turnover(ticker: str) -> float:
         return 0.0
 
 
-def get_quote_details(ticker: str) -> dict:
-    """Fetch full quote including circuit limits and OHLCV."""
+def get_quote_details(ticker: str, exchange: str = "NSE") -> dict:
+    """Fetch full quote including circuit limits and OHLCV. Works for NSE and BSE."""
     kite = get_kite_client()
-    return kite.quote(f"NSE:{ticker}")[f"NSE:{ticker}"]
+    key = f"{exchange}:{ticker}"
+    return kite.quote(key)[key]
 
 
-def microstructure_checks(ticker: str, capital_to_deploy: float) -> tuple[bool, str]:
+def microstructure_checks(
+    ticker: str, capital_to_deploy: float, exchange: str = "NSE"
+) -> tuple[bool, str]:
     """
     Returns (ok, reason). If ok=False, the trade should be skipped.
     These are deterministic checks — no LLM involved.
-
-    TODO: implement the 20-day ADV fetch (requires Kite historical data
-    API — needs the ₹500/month plan). Stub returns True for now.
+    Works for both NSE and BSE listed stocks.
     """
     try:
-        quote = get_quote_details(ticker)
+        quote = get_quote_details(ticker, exchange)
         ltp = quote["last_price"]
         upper_circuit = quote.get("upper_circuit_limit", ltp * 1.2)
         lower_circuit = quote.get("lower_circuit_limit", ltp * 0.8)
@@ -156,22 +162,22 @@ def microstructure_checks(ticker: str, capital_to_deploy: float) -> tuple[bool, 
         pct_from_upper = (upper_circuit - ltp) / upper_circuit * 100
         pct_from_lower = (ltp - lower_circuit) / ltp * 100
         if pct_from_upper < CIRCUIT_BUFFER_PCT:
-            return False, f"{ticker} is within {pct_from_upper:.1f}% of upper circuit — skip."
+            return False, f"{exchange}:{ticker} is within {pct_from_upper:.1f}% of upper circuit — skip."
         if pct_from_lower < CIRCUIT_BUFFER_PCT:
-            return False, f"{ticker} is within {pct_from_lower:.1f}% of lower circuit — skip."
+            return False, f"{exchange}:{ticker} is within {pct_from_lower:.1f}% of lower circuit — skip."
 
         # Liquidity check: skip stocks whose 20-day avg daily turnover is below
         # MIN_DAILY_TURNOVER_INR (default ₹3 Cr). This catches micro-caps that
         # pass the fundamental screen but are too illiquid to trade without
         # significant slippage. Fail-safe: if data is unavailable, log and continue.
-        avg_turnover = get_20d_avg_turnover(ticker)
+        avg_turnover = get_20d_avg_turnover(ticker, exchange)
         if avg_turnover == 0.0:
             log.warning(
-                f"{ticker}: could not verify liquidity — proceeding with caution."
+                f"{exchange}:{ticker}: could not verify liquidity — proceeding with caution."
             )
         elif avg_turnover < MIN_DAILY_TURNOVER_INR:
             return False, (
-                f"{ticker} avg daily turnover ₹{avg_turnover/1e7:.1f}Cr < "
+                f"{exchange}:{ticker} avg daily turnover ₹{avg_turnover/1e7:.1f}Cr < "
                 f"minimum ₹{MIN_DAILY_TURNOVER_INR/1e7:.0f}Cr — too illiquid to trade."
             )
 
@@ -193,7 +199,7 @@ def microstructure_checks(ticker: str, capital_to_deploy: float) -> tuple[bool, 
         return True, "Microstructure checks passed."
 
     except Exception as e:
-        return False, f"Could not fetch quote for {ticker}: {e}"
+        return False, f"Could not fetch quote for {exchange}:{ticker}: {e}"
 
 
 def execute_trade(
@@ -201,22 +207,31 @@ def execute_trade(
     ticker: str,
     direction: str,
     capital_to_deploy: float,
+    exchange: str = "NSE",
 ) -> ExecutionResult:
     """
-    Main entry point called by the Telegram approval webhook.
+    Main entry point called by the email approval webhook.
 
     1. Re-fetches live LTP (price may have moved since signal was generated)
     2. Runs microstructure checks
     3. Computes share quantity from LTP
     4. Places order (or logs it in PAPER_MODE)
     5. Logs to ledger
+
+    exchange: "NSE" or "BSE" — passed through from the TradeSignal so BSE-listed
+    stocks are routed to the correct exchange.
     """
     from ledger.db import log_trade, update_signal_response
 
+    # Map exchange string → Kite constant (used in live order placement)
+    from kiteconnect import KiteConnect as _KC
+    _EXCHANGE_MAP = {"NSE": _KC.EXCHANGE_NSE, "BSE": _KC.EXCHANGE_BSE}
+    kite_exchange = _EXCHANGE_MAP.get(exchange.upper(), _KC.EXCHANGE_NSE)
+
     # Microstructure checks first — always, paper or live
-    ok, check_note = microstructure_checks(ticker, capital_to_deploy)
+    ok, check_note = microstructure_checks(ticker, capital_to_deploy, exchange)
     if not ok:
-        log.warning(f"Microstructure check failed for {ticker}: {check_note}")
+        log.warning(f"Microstructure check failed for {exchange}:{ticker}: {check_note}")
         return ExecutionResult(
             success=False, order_id=None, fill_price=None,
             quantity=0, notes=check_note, mode="PAPER" if PAPER_MODE else "LIVE",
@@ -224,11 +239,11 @@ def execute_trade(
 
     # Get live price and compute quantity
     try:
-        ltp = get_ltp(ticker)
+        ltp = get_ltp(ticker, exchange)
     except Exception as e:
         return ExecutionResult(
             success=False, order_id=None, fill_price=None,
-            quantity=0, notes=f"Could not fetch LTP: {e}",
+            quantity=0, notes=f"Could not fetch LTP for {exchange}:{ticker}: {e}",
             mode="PAPER" if PAPER_MODE else "LIVE",
         )
 
@@ -237,7 +252,7 @@ def execute_trade(
 
     if PAPER_MODE:
         log.info(
-            f"[PAPER] Would place {kite_direction} {quantity} x {ticker} @ ₹{ltp:.2f} "
+            f"[PAPER] Would place {kite_direction} {quantity} x {exchange}:{ticker} @ ₹{ltp:.2f} "
             f"= ₹{quantity * ltp:,.0f}"
         )
         trade_id = log_trade(signal_id, ticker, direction, quantity, ltp, mode="PAPER")
@@ -253,7 +268,7 @@ def execute_trade(
         kite = get_kite_client()
         order_id = kite.place_order(
             tradingsymbol=ticker,
-            exchange=kite.EXCHANGE_NSE,
+            exchange=kite_exchange,
             transaction_type=kite.TRANSACTION_TYPE_BUY if direction == "BUY" else kite.TRANSACTION_TYPE_SELL,
             quantity=quantity,
             order_type=kite.ORDER_TYPE_MARKET,
@@ -262,14 +277,14 @@ def execute_trade(
         )
         db_trade_id = log_trade(signal_id, ticker, direction, quantity, ltp, mode="LIVE")
         update_signal_response(signal_id, "APPROVED")
-        log.info(f"[LIVE] Order placed: {order_id} — {kite_direction} {quantity} x {ticker}")
+        log.info(f"[LIVE] Order placed: {order_id} — {kite_direction} {quantity} x {exchange}:{ticker}")
         return ExecutionResult(
             success=True, order_id=str(order_id), fill_price=ltp,
             quantity=quantity, notes=f"Live order placed. {check_note}",
             mode="LIVE", trade_id=db_trade_id,
         )
     except Exception as e:
-        log.error(f"Order placement failed for {ticker}: {e}")
+        log.error(f"Order placement failed for {exchange}:{ticker}: {e}")
         return ExecutionResult(
             success=False, order_id=None, fill_price=None,
             quantity=quantity, notes=f"Order failed: {e}", mode="LIVE",

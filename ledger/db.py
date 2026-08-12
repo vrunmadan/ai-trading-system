@@ -21,6 +21,13 @@ def init_db():
     with sqlite3.connect(DB_PATH) as conn:
         with open(SCHEMA_PATH) as f:
             conn.executescript(f.read())
+        # Migration: add exchange column to signals if it doesn't exist yet
+        # (for existing Railway deployments that ran before this column was added)
+        try:
+            conn.execute("ALTER TABLE signals ADD COLUMN exchange TEXT NOT NULL DEFAULT 'NSE'")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # Column already exists — normal on fresh init
     print(f"Ledger initialized at {DB_PATH}")
 
 
@@ -55,15 +62,16 @@ def log_signal(signal, sizing, qc_verdict=None) -> int:
         cur = conn.execute(
             """
             INSERT INTO signals (
-                created_at, ticker, regime, strategy_bucket, direction,
+                created_at, ticker, exchange, regime, strategy_bucket, direction,
                 technical_score, fundamental_score, confidence_score,
                 researcher_rationale, qc_verdict, qc_rationale,
                 sized_quantity, capital_to_deploy, sizer_notes, status
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 now_ist(),
                 signal.ticker,
+                getattr(signal, "exchange", "NSE"),  # backward-compat if old signal object
                 signal.regime.value,
                 signal.strategy_bucket,
                 signal.direction,

@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS signals (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at TEXT NOT NULL,
     ticker TEXT NOT NULL,
+    exchange TEXT NOT NULL DEFAULT 'NSE',  -- NSE or BSE
     regime TEXT NOT NULL,              -- crash / bear / sideways / bull / euphoria
     strategy_bucket TEXT NOT NULL,     -- which strategy template fired
     direction TEXT NOT NULL,           -- BUY / SELL
