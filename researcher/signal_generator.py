@@ -423,7 +423,7 @@ Output your verdict as JSON."""
     try:
         msg = client.messages.create(
             model=RESEARCHER_MODEL,
-            max_tokens=500,
+            max_tokens=2000,  # 500 was too low — claude-sonnet-5 ThinkingBlock consumes ~400 tokens before the JSON text
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": prompt}],
         )
