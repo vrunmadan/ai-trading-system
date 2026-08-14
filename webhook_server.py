@@ -186,6 +186,113 @@ def kite_callback():
 
 
 # ---------------------------------------------------------------------------
+# Status / health-check endpoint — machine-readable component health
+# ---------------------------------------------------------------------------
+
+@app.route("/status", methods=["GET"])
+def status():
+    """
+    Returns JSON health of every system component.
+    No secret required — read-only and contains no sensitive values.
+
+    Usage:
+      https://ai-trading-system-production-6af9.up.railway.app/status
+    """
+    import datetime
+    import pytz
+
+    checks = {}
+
+    # 1. Email (Resend) config
+    resend_key = os.getenv("RESEND_API_KEY", "")
+    alert_email = os.getenv("ALERT_EMAIL", "")
+    checks["email"] = {
+        "resend_api_key_set": bool(resend_key),
+        "alert_email_set":    bool(alert_email),
+        "alert_email_value":  alert_email or "(not set)",
+        "resend_from":        os.getenv("RESEND_FROM", "(not set)"),
+        "ok":                 bool(resend_key and alert_email),
+    }
+
+    # 2. Kite token
+    try:
+        from ledger.db import get_kite_token
+        token = get_kite_token()
+        checks["kite_token"] = {
+            "present": bool(token),
+            "prefix":  (token[:8] + "...") if token else None,
+            "note":    "Token expires at midnight IST each day — must click morning login email",
+            "ok":      bool(token),
+        }
+    except Exception as e:
+        checks["kite_token"] = {"ok": False, "error": str(e)}
+
+    # 3. Kite API env vars
+    checks["kite_config"] = {
+        "api_key_set":    bool(os.getenv("KITE_API_KEY")),
+        "api_secret_set": bool(os.getenv("KITE_API_SECRET")),
+        "railway_url":    os.getenv("RAILWAY_URL", "(not set)"),
+        "ok":             bool(os.getenv("KITE_API_KEY") and os.getenv("KITE_API_SECRET")),
+    }
+
+    # 4. DB connectivity
+    try:
+        from ledger.db import get_weekly_pnl
+        get_weekly_pnl()
+        checks["database"] = {"ok": True}
+    except Exception as e:
+        checks["database"] = {"ok": False, "error": str(e)}
+
+    # 5. Recent signals (last 7 days)
+    try:
+        import sqlite3
+        db_path = os.path.join(os.path.dirname(__file__), "ledger", "trades.db")
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM signals WHERE created_at > datetime('now', '-7 days')"
+        )
+        count = cur.fetchone()[0]
+        cur.execute(
+            "SELECT ticker, created_at, confidence_score FROM signals "
+            "ORDER BY created_at DESC LIMIT 3"
+        )
+        recent = [{"ticker": r[0], "at": r[1], "confidence": r[2]} for r in cur.fetchall()]
+        conn.close()
+        checks["signals"] = {"last_7_days": count, "recent": recent, "ok": True}
+    except Exception as e:
+        checks["signals"] = {"ok": False, "error": str(e)}
+
+    # 6. Screener config
+    checks["screener"] = {
+        "email_set":    bool(os.getenv("SCREENER_EMAIL")),
+        "password_set": bool(os.getenv("SCREENER_PASSWORD")),
+        "ok":           bool(os.getenv("SCREENER_EMAIL") and os.getenv("SCREENER_PASSWORD")),
+    }
+
+    # 7. Other env vars
+    checks["env"] = {
+        "paper_mode":         os.getenv("PAPER_MODE", "true"),
+        "total_capital_inr":  os.getenv("TOTAL_CAPITAL_INR", "(not set)"),
+        "approval_secret_set": bool(os.getenv("APPROVAL_SECRET", "")),
+        "google_sheets_set":  bool(os.getenv("GOOGLE_SHEETS_CREDENTIALS_JSON")),
+    }
+
+    # Overall status
+    critical = ["email", "kite_token", "kite_config", "database"]
+    all_ok = all(checks[k].get("ok", False) for k in critical)
+
+    IST = pytz.timezone("Asia/Kolkata")
+    now_ist = datetime.datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST")
+
+    return jsonify({
+        "status":    "ok" if all_ok else "degraded",
+        "timestamp": now_ist,
+        "checks":    checks,
+    }), 200 if all_ok else 503
+
+
+# ---------------------------------------------------------------------------
 # Debug / test endpoints (safe — read-only or one-shot, no side effects in prod)
 # ---------------------------------------------------------------------------
 
@@ -429,11 +536,59 @@ def _safe_run_universe_refresh():
 # Entry point
 # ---------------------------------------------------------------------------
 
+def _startup_health_check():
+    """
+    Log a clear summary of component health at startup.
+    Problems here show up at the top of Railway logs — easy to spot.
+    """
+    issues = []
+
+    resend_key  = os.getenv("RESEND_API_KEY", "")
+    alert_email = os.getenv("ALERT_EMAIL", "")
+    kite_key    = os.getenv("KITE_API_KEY", "")
+    kite_secret = os.getenv("KITE_API_SECRET", "")
+
+    if not resend_key:
+        issues.append("RESEND_API_KEY not set — email alerts will fail")
+    if not alert_email:
+        issues.append("ALERT_EMAIL not set — no destination for alerts")
+    if not kite_key or not kite_secret:
+        issues.append("KITE_API_KEY / KITE_API_SECRET not set — Kite integration broken")
+    if not os.getenv("APPROVAL_SECRET"):
+        issues.append("APPROVAL_SECRET not set — approve/reject links will use default (insecure)")
+
+    resend_from = os.getenv("RESEND_FROM", "AI Trading System <onboarding@resend.dev>")
+    if "onboarding@resend.dev" in resend_from:
+        issues.append(
+            "RESEND_FROM uses onboarding@resend.dev — this only works to the email you "
+            "used to sign up for Resend. If alerts aren't arriving, verify a domain at "
+            "resend.com/domains and set RESEND_FROM=trading@yourdomain.com"
+        )
+
+    if issues:
+        log.warning("=" * 60)
+        log.warning("STARTUP HEALTH CHECK — ISSUES FOUND:")
+        for i, issue in enumerate(issues, 1):
+            log.warning(f"  {i}. {issue}")
+        log.warning("=" * 60)
+    else:
+        log.info("Startup health check: all critical env vars present ✓")
+
+    log.info(f"  ALERT_EMAIL   = {alert_email or '(not set)'}")
+    log.info(f"  RESEND_FROM   = {resend_from}")
+    log.info(f"  RAILWAY_URL   = {os.getenv('RAILWAY_URL', '(not set)')}")
+    log.info(f"  PAPER_MODE    = {os.getenv('PAPER_MODE', 'true')}")
+    log.info(f"  TOTAL_CAPITAL = ₹{os.getenv('TOTAL_CAPITAL_INR', '(not set)')}")
+
+
 if __name__ == "__main__":
     from ledger.db import init_db
 
     # Initialize database on startup
     init_db()
+
+    # Run startup health check — problems appear at top of Railway logs
+    _startup_health_check()
 
     # Start scheduler in background
     scheduler = _start_scheduler()
