@@ -246,7 +246,8 @@ def status():
     # 5. Recent signals (last 7 days)
     try:
         import sqlite3
-        db_path = os.path.join(os.path.dirname(__file__), "ledger", "trades.db")
+        from ledger.db import DB_PATH
+        db_path = DB_PATH
         conn = sqlite3.connect(db_path)
         cur = conn.cursor()
         cur.execute(
