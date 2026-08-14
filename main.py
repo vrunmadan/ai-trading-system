@@ -188,14 +188,22 @@ def run_cycle() -> None:
 # ---------------------------------------------------------------------------
 
 def run_eod_sweep() -> None:
-    """15:35 IST — mark unanswered signals as NO_RESPONSE."""
-    from alerts.gmail_alert import send_eod_missed_opportunities
+    """15:35 IST — mark unanswered signals as NO_RESPONSE + send daily summary."""
+    from alerts.gmail_alert import send_eod_missed_opportunities, send_daily_cycle_summary
 
     log.info("Running EOD missed-opportunity sweep...")
     try:
         send_eod_missed_opportunities()
     except Exception as e:
         log.error(f"EOD sweep failed: {e}", exc_info=True)
+
+    # Daily summary email — always fires, even when no signals were generated.
+    # This gives visibility into whether the system is working or silently failing.
+    log.info("Sending daily cycle summary email...")
+    try:
+        send_daily_cycle_summary()
+    except Exception as e:
+        log.error(f"Daily summary email failed: {e}", exc_info=True)
 
 
 def run_position_monitor() -> None:

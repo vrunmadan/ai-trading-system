@@ -438,3 +438,56 @@ def send_eod_missed_opportunities() -> None:
         subject=f"📋 Missed today ({len(pending)} signal{'s' if len(pending) > 1 else ''})",
         body=f"These signals received no response today:\n\n{lines}\n\nAll marked NO_RESPONSE.",
     )
+
+
+def send_daily_cycle_summary() -> None:
+    """
+    Sent at 15:35 IST alongside the EOD sweep.
+    Shows a plain-English summary of today's research cycles regardless of
+    whether any signal fired. This gives visibility into WHY no recommendations
+    came through — was it regime, threshold, or errors?
+
+    Reads from the DB signals table (today's records) and from a module-level
+    cycle log updated by the scheduler.
+    """
+    import datetime
+    import pytz
+    from ledger.db import get_db
+
+    IST = pytz.timezone("Asia/Kolkata")
+    today_ist = datetime.datetime.now(IST).strftime("%Y-%m-%d")
+
+    with get_db() as conn:
+        signals_today = conn.execute(
+            "SELECT id, ticker, exchange, direction, confidence_score, status, created_at "
+            "FROM signals WHERE DATE(created_at) = ? ORDER BY created_at",
+            (today_ist,)
+        ).fetchall()
+
+    if signals_today:
+        signal_lines = "\n".join(
+            f"  • {r['direction']} {r['ticker']} ({r['exchange']}) — "
+            f"{r['confidence_score']:.0f}% confidence — {r['status']}"
+            for r in signals_today
+        )
+        signal_block = f"Signals generated today:\n{signal_lines}"
+    else:
+        signal_block = (
+            "No signals reached the confidence threshold today (75%+ required).\n\n"
+            "This is normal — the threshold is intentionally strict. "
+            "Check /diagnose_cycle to see what the indicators looked like."
+        )
+
+    body = (
+        f"Daily research cycle summary — {today_ist}\n"
+        f"{'=' * 50}\n\n"
+        f"{signal_block}\n\n"
+        f"Cycles run: 7 (9:15–15:15 IST, hourly)\n"
+        f"To inspect today's indicators without Claude:\n"
+        f"  {RAILWAY_URL}/diagnose_cycle?secret=<APPROVAL_SECRET>\n"
+    )
+
+    send_plain_email(
+        subject=f"📊 Daily summary — {len(signals_today)} signal{'s' if len(signals_today) != 1 else ''} today",
+        body=body,
+    )

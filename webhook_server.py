@@ -329,6 +329,237 @@ def send_test_email():
 
 
 # ---------------------------------------------------------------------------
+# Cycle diagnostic endpoint — runs regime + indicators for all stocks (NO Claude)
+# ---------------------------------------------------------------------------
+
+@app.route("/diagnose_cycle", methods=["GET"])
+def diagnose_cycle():
+    """
+    Runs a full diagnostic cycle WITHOUT calling Claude:
+      - Regime classification (real Kite data)
+      - Indicator computation for every universe stock
+      - Shows which stocks are technically eligible for each strategy
+
+    Fast (~30s). Use this to debug why no signals are appearing.
+    Usage: https://ai-trading-system-production-6af9.up.railway.app/diagnose_cycle?secret=<APPROVAL_SECRET>
+    """
+    from flask import make_response
+
+    secret = request.args.get("secret", "")
+    expected = os.getenv("APPROVAL_SECRET", "")
+    if not expected or secret != expected:
+        return make_response(_html_response("Forbidden", "Wrong or missing secret.", False), 403)
+
+    try:
+        import datetime
+        import pytz
+        from kiteconnect import KiteConnect
+        from ledger.db import get_kite_token
+        from universe.loader import load_universe
+        from researcher.regime_classifier import classify_regime, STRATEGY_BASKETS
+        from researcher.signal_generator import _compute_indicators, MIN_CONFIDENCE
+
+        IST = pytz.timezone("Asia/Kolkata")
+        now_ist = datetime.datetime.now(IST).strftime("%Y-%m-%d %H:%M IST")
+
+        # Step 1: Kite client
+        token = get_kite_token()
+        if not token:
+            return make_response(_html_response("No Kite token", "Complete today's Kite login first.", False), 503)
+
+        kite = KiteConnect(api_key=os.getenv("KITE_API_KEY"))
+        kite.set_access_token(token)
+
+        # Step 2: Regime
+        regime_reading = classify_regime()
+        baskets = STRATEGY_BASKETS.get(regime_reading.regime, [])
+
+        # Step 3: Instruments maps
+        from datetime import date, timedelta
+        try:
+            bse_rows = kite.instruments("BSE")
+            bse_map = {r["tradingsymbol"]: {"token": r["instrument_token"], "exchange": "BSE"}
+                       for r in bse_rows if r["instrument_type"] in ("EQ", "BE")}
+        except Exception:
+            bse_map = {}
+
+        try:
+            nse_rows = kite.instruments("NSE")
+            nse_map = {r["tradingsymbol"]: {"token": r["instrument_token"], "exchange": "NSE"}
+                       for r in nse_rows if r["instrument_type"] in ("EQ", "BE")}
+        except Exception:
+            nse_map = {}
+
+        instruments_map = {**bse_map, **nse_map}
+
+        # Step 4: Scan universe
+        universe = load_universe()
+        from_date = (date.today() - timedelta(days=420)).strftime("%Y-%m-%d")
+        to_date   = date.today().strftime("%Y-%m-%d")
+
+        rows = []
+        for entry in universe:
+            info = instruments_map.get(entry.ticker)
+            if not info:
+                rows.append({"ticker": entry.ticker, "exchange": entry.exchange,
+                             "status": "NO_TOKEN", "indicators": None})
+                continue
+            try:
+                hist = kite.historical_data(int(info["token"]), from_date, to_date, "day")
+                if len(hist) < 30:
+                    rows.append({"ticker": entry.ticker, "exchange": info["exchange"],
+                                 "status": f"THIN_HISTORY ({len(hist)} bars)", "indicators": None})
+                    continue
+                ind = _compute_indicators(hist, entry.ticker)
+                rows.append({"ticker": entry.ticker, "exchange": info["exchange"],
+                             "status": "OK", "indicators": ind})
+            except Exception as e:
+                rows.append({"ticker": entry.ticker, "exchange": info["exchange"],
+                             "status": f"ERROR: {e}", "indicators": None})
+
+        # Render HTML report
+        regime_color = {"bull": "#22c55e", "euphoria": "#16a34a", "sideways": "#f59e0b",
+                        "bear": "#ef4444", "extreme_fear_crash": "#7f1d1d"}.get(regime_reading.regime.value, "#888")
+
+        strategy_names = [s["name"] for s in baskets] if baskets else []
+        has_strategies = bool(baskets)
+
+        def _flag_cell(ind, strategy_name):
+            """Quick rule-of-thumb eligibility check (simplified — Claude does full eval)."""
+            if not ind:
+                return "<td style='color:#888'>—</td>"
+            flags = []
+            if strategy_name == "52wk_breakout":
+                ok_vol   = ind["volume_ratio_20d"] >= 1.5
+                ok_rsi   = 50 <= ind["rsi_14"] <= 70
+                ok_st    = ind["supertrend_10_3"] == "GREEN"
+                ok_52wk  = ind["pct_from_52wk_high"] >= -1.5
+                all_ok   = ok_vol and ok_rsi and ok_st and ok_52wk
+                flags = [f"vol {ind['volume_ratio_20d']:.1f}×{'✓' if ok_vol else '✗'}",
+                         f"RSI {ind['rsi_14']:.0f}{'✓' if ok_rsi else '✗'}",
+                         f"ST {ind['supertrend_10_3']}{'✓' if ok_st else '✗'}",
+                         f"52wk {ind['pct_from_52wk_high']:+.1f}%{'✓' if ok_52wk else '✗'}"]
+                color = "#22c55e" if all_ok else ("#f59e0b" if sum([ok_vol, ok_rsi, ok_st, ok_52wk]) >= 2 else "#ef4444")
+            elif strategy_name == "supertrend_buy":
+                ok_flip  = ind["supertrend_just_flipped"]
+                ok_rsi   = 40 <= ind["rsi_14"] <= 65
+                ok_sma   = ind["above_sma50"]
+                all_ok   = ok_flip and ok_rsi and ok_sma
+                flags = [f"flipped:{'✓' if ok_flip else '✗'}",
+                         f"RSI {ind['rsi_14']:.0f}{'✓' if ok_rsi else '✗'}",
+                         f">SMA50:{'✓' if ok_sma else '✗'}"]
+                color = "#22c55e" if all_ok else ("#f59e0b" if sum([ok_flip, ok_rsi, ok_sma]) >= 2 else "#ef4444")
+            elif strategy_name == "rsi_mean_reversion":
+                ok_rsi   = ind["rsi_14"] < 35
+                ok_bb    = ind["bollinger_position"] < 25
+                ok_52wk  = ind["pct_from_52wk_high"] > -20
+                all_ok   = ok_rsi and ok_bb and ok_52wk
+                flags = [f"RSI {ind['rsi_14']:.0f}{'✓' if ok_rsi else '✗'}",
+                         f"BB {ind['bollinger_position']:.0f}%{'✓' if ok_bb else '✗'}",
+                         f"52wk {ind['pct_from_52wk_high']:+.1f}%{'✓' if ok_52wk else '✗'}"]
+                color = "#22c55e" if all_ok else ("#f59e0b" if sum([ok_rsi, ok_bb, ok_52wk]) >= 2 else "#ef4444")
+            else:
+                flags = ["unknown strategy"]
+                color = "#888"
+            cell_bg = f"background:{color}22"
+            return f"<td style='{cell_bg};font-size:11px;padding:4px'>{' | '.join(flags)}</td>"
+
+        # Build table
+        table_rows = ""
+        for r in rows:
+            ind = r["indicators"]
+            if r["status"] == "OK" and ind:
+                ind_cells = (
+                    f"<td style='font-size:11px'>₹{ind['ltp']:,.0f}</td>"
+                    f"<td style='font-size:11px'>{ind['rsi_14']:.0f}</td>"
+                    f"<td style='font-size:11px'>{ind['supertrend_10_3'][0]}{'↑' if ind['supertrend_just_flipped'] else ''}</td>"
+                    f"<td style='font-size:11px'>{ind['volume_ratio_20d']:.1f}×</td>"
+                    f"<td style='font-size:11px'>{ind['pct_from_52wk_high']:+.1f}%</td>"
+                    f"<td style='font-size:11px'>{ind['bollinger_position']:.0f}%</td>"
+                )
+                strategy_cells = "".join(_flag_cell(ind, s) for s in strategy_names)
+                row_bg = ""
+            else:
+                ind_cells = f"<td colspan='6' style='color:#ef4444;font-size:11px'>{r['status']}</td>"
+                strategy_cells = "<td colspan='99' style='color:#888'>—</td>" if strategy_names else ""
+                row_bg = "background:#fff5f5"
+
+            table_rows += (
+                f"<tr style='border-bottom:1px solid #e5e7eb;{row_bg}'>"
+                f"<td style='font-weight:600;padding:6px 8px'>{r['ticker']}</td>"
+                f"<td style='font-size:11px;color:#555'>{r['exchange']}</td>"
+                + ind_cells + strategy_cells +
+                f"</tr>"
+            )
+
+        strategy_headers = "".join(f"<th style='padding:6px 8px;background:#1e293b;color:#fff'>{s}</th>" for s in strategy_names)
+        ok_count    = sum(1 for r in rows if r["status"] == "OK")
+        no_token    = sum(1 for r in rows if r["status"] == "NO_TOKEN")
+        errors      = sum(1 for r in rows if r["status"] not in ("OK", "NO_TOKEN") and "THIN" not in r["status"])
+
+        html = f"""<!DOCTYPE html>
+<html><head><meta name='viewport' content='width=device-width,initial-scale=1'>
+<title>Cycle Diagnostic — {now_ist}</title>
+<style>
+  body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:20px;background:#f8fafc;color:#1e293b}}
+  h1{{font-size:20px;margin:0 0 4px}} h2{{font-size:15px;margin:16px 0 8px;color:#374151}}
+  .badge{{display:inline-block;padding:2px 10px;border-radius:99px;font-size:12px;font-weight:700;color:#fff}}
+  table{{width:100%;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)}}
+  th{{padding:6px 8px;background:#334155;color:#fff;text-align:left;font-size:12px}}
+  td{{padding:4px 8px;font-size:12px;vertical-align:middle}}
+  .card{{background:#fff;border-radius:8px;padding:16px;margin-bottom:16px;box-shadow:0 1px 4px rgba(0,0,0,.08)}}
+  .stat{{display:inline-block;margin-right:24px}}
+  .stat-val{{font-size:24px;font-weight:700}} .stat-lbl{{font-size:12px;color:#64748b}}
+</style></head>
+<body>
+<h1>🔍 Cycle Diagnostic</h1>
+<p style='color:#64748b;margin:0 0 16px'>{now_ist} — NO Claude calls made (indicators only)</p>
+
+<div class='card'>
+  <h2>Regime</h2>
+  <span class='badge' style='background:{regime_color}'>{regime_reading.regime.value.upper()}</span>
+  &nbsp;<strong>{regime_reading.confidence:.0f}%</strong> confidence
+  <p style='margin:8px 0 0;font-size:13px;color:#374151'>{regime_reading.rationale}</p>
+  <p style='margin:4px 0 0;font-size:12px;color:#64748b'>
+    Nifty vs 200-EMA: <strong>{regime_reading.nifty_vs_ema_pct:+.1f}%</strong> &nbsp;|&nbsp;
+    VIX: <strong>{regime_reading.vix:.1f}</strong> &nbsp;|&nbsp;
+    Breadth: <strong>{regime_reading.breadth_pct:.0f}%</strong>
+  </p>
+  {'<p style="margin:8px 0 0;color:#ef4444;font-weight:600">⚠ Low confidence — cycle would be SKIPPED in production</p>' if regime_reading.confidence < 60 else '<p style="margin:8px 0 0;color:#22c55e;font-weight:600">✓ Confidence sufficient — cycle would proceed</p>'}
+  {'<p style="margin:4px 0 0;color:#64748b;font-size:12px">Active strategies: ' + ', '.join(strategy_names) + '</p>' if strategy_names else '<p style="margin:8px 0 0;color:#f59e0b;font-weight:600">⚠ No long strategies for this regime — all cycles return immediately</p>'}
+</div>
+
+<div class='card'>
+  <h2>Universe Scan ({len(rows)} stocks)</h2>
+  <div style='margin-bottom:12px'>
+    <div class='stat'><div class='stat-val' style='color:#22c55e'>{ok_count}</div><div class='stat-lbl'>Data OK</div></div>
+    <div class='stat'><div class='stat-val' style='color:#ef4444'>{no_token}</div><div class='stat-lbl'>No Token</div></div>
+    <div class='stat'><div class='stat-val' style='color:#f59e0b'>{errors}</div><div class='stat-lbl'>Errors</div></div>
+  </div>
+  <table>
+    <thead><tr>
+      <th>Ticker</th><th>Exch</th><th>LTP</th><th>RSI</th><th>ST</th><th>Vol</th><th>52wk</th><th>BB%</th>
+      {strategy_headers if has_strategies else ''}
+    </tr></thead>
+    <tbody>{table_rows}</tbody>
+  </table>
+</div>
+
+<p style='font-size:12px;color:#94a3b8'>
+  ✓ green = all criteria met (Claude would evaluate this) &nbsp;|&nbsp;
+  🟡 amber = 2+ criteria met (marginal) &nbsp;|&nbsp;
+  ✗ red = insufficient
+</p>
+</body></html>"""
+
+        return make_response(html, 200)
+
+    except Exception as e:
+        log.error(f"/diagnose_cycle error: {e}", exc_info=True)
+        return make_response(_html_response("Error", str(e), False), 500)
+
+
+# ---------------------------------------------------------------------------
 # Universe diagnostic endpoint — checks CSV vs Kite live instrument list
 # ---------------------------------------------------------------------------
 
