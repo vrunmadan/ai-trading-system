@@ -13,6 +13,7 @@ __pycache__/
 venv/
 dist/
 build/
+.pytest_cache/
 
 # SQLite ledger (local state — not for version control)
 ledger/*.db
