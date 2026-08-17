@@ -21,10 +21,11 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 import anthropic
+import pytz
 
 from researcher.regime_classifier import Regime, RegimeReading
 from universe.loader import get_tickers, load_universe
@@ -33,6 +34,7 @@ log = logging.getLogger(__name__)
 
 RESEARCHER_MODEL = os.getenv("RESEARCHER_MODEL", "claude-sonnet-5")
 MIN_CONFIDENCE = float(os.getenv("MIN_SIGNAL_CONFIDENCE", "75"))
+IST = pytz.timezone("Asia/Kolkata")
 
 
 @dataclass
@@ -520,7 +522,7 @@ def generate_signal(regime_reading: RegimeReading) -> Optional[TradeSignal]:
     to_date = date.today().strftime("%Y-%m-%d")
 
     from ledger.db import log_cycle_evaluation
-    cycle_at = date.today().strftime("%Y-%m-%d") + " " + __import__("datetime").datetime.now().strftime("%H:%M:%S")
+    cycle_at = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
 
     best_signal: Optional[TradeSignal] = None
     best_confidence = 0.0
@@ -588,9 +590,20 @@ def generate_signal(regime_reading: RegimeReading) -> Optional[TradeSignal]:
                 )
                 continue
 
-            confidence = float(verdict.get("confidence_score", 0))
-            tech_score = float(verdict.get("technical_score", 0))
-            fund_score = float(verdict.get("fundamental_score", 0))
+            try:
+                confidence = float(verdict.get("confidence_score", 0))
+                tech_score = float(verdict.get("technical_score", 0))
+                fund_score = float(verdict.get("fundamental_score", 0))
+            except (TypeError, ValueError) as e:
+                log.error(f"Malformed scores from Claude for {ticker}/{strategy['name']}: {e}")
+                log_cycle_evaluation(
+                    cycle_at=cycle_at, regime=regime.value,
+                    regime_confidence=regime_reading.confidence,
+                    ticker=ticker, exchange=resolved_exchange,
+                    strategy=strategy["name"], verdict="ERROR",
+                    indicators=indicators, rationale=f"Malformed scores in Claude verdict: {e}",
+                )
+                continue
             rationale  = verdict.get("rationale", "")
 
             if verdict.get("verdict") != "TRADE":

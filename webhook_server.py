@@ -650,7 +650,7 @@ def cycle_history():
                   <td style='font-size:11px'>{r['strategy']}</td>
                   <td style='padding:5px 8px;color:{vc};font-weight:700;font-size:12px'>{r['verdict']}</td>
                   {_score_cell(r['technical_score'])}{_score_cell(r['fundamental_score'])}{_score_cell(r['confidence_score'])}
-                  <td style='font-size:11px'>{r['rsi']:.0f if r['rsi'] else '—'}</td>
+                  <td style='font-size:11px'>{f"{r['rsi']:.0f}" if r['rsi'] else '—'}</td>
                   <td style='font-size:11px'>{st_short}</td>
                   <td style='font-size:11px'>{f"{r['volume_ratio']:.1f}×" if r['volume_ratio'] else '—'}</td>
                   <td style='font-size:11px'>{f"{r['pct_from_52wk_high']:+.1f}%" if r['pct_from_52wk_high'] is not None else '—'}</td>
