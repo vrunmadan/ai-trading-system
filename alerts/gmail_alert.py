@@ -464,6 +464,25 @@ def send_daily_cycle_summary() -> None:
             (today_ist,)
         ).fetchall()
 
+    # Pull today's cycle log for best scores
+    try:
+        from ledger.db import get_cycle_log
+        cycle_rows = get_cycle_log(days=1)
+        scored = [r for r in cycle_rows if r.get("confidence_score") is not None]
+        if scored:
+            top5 = sorted(scored, key=lambda r: -(r["confidence_score"] or 0))[:5]
+            top_lines = "\n".join(
+                f"  {r['ticker']:12s} {r['strategy']:20s}  "
+                f"tech={r['technical_score'] or 0:.0f}  fund={r['fundamental_score'] or 0:.0f}  "
+                f"conf={r['confidence_score']:.0f}%  [{r['verdict']}]"
+                for r in top5
+            )
+            top_block = f"\nTop 5 scores today (75% needed to fire):\n{top_lines}"
+        else:
+            top_block = ""
+    except Exception:
+        top_block = ""
+
     if signals_today:
         signal_lines = "\n".join(
             f"  • {r['direction']} {r['ticker']} ({r['exchange']}) — "
@@ -472,19 +491,15 @@ def send_daily_cycle_summary() -> None:
         )
         signal_block = f"Signals generated today:\n{signal_lines}"
     else:
-        signal_block = (
-            "No signals reached the confidence threshold today (75%+ required).\n\n"
-            "This is normal — the threshold is intentionally strict. "
-            "Check /diagnose_cycle to see what the indicators looked like."
-        )
+        signal_block = "No signals reached the confidence threshold today (75%+ required)."
 
     body = (
         f"Daily research cycle summary — {today_ist}\n"
         f"{'=' * 50}\n\n"
-        f"{signal_block}\n\n"
-        f"Cycles run: 7 (9:15–15:15 IST, hourly)\n"
-        f"To inspect today's indicators without Claude:\n"
-        f"  {RAILWAY_URL}/diagnose_cycle?secret=<APPROVAL_SECRET>\n"
+        f"{signal_block}"
+        f"{top_block}\n\n"
+        f"Full detail:\n"
+        f"  {RAILWAY_URL}/cycle_history?secret=<APPROVAL_SECRET>&days=1\n"
     )
 
     send_plain_email(

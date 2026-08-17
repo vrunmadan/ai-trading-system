@@ -519,6 +519,9 @@ def generate_signal(regime_reading: RegimeReading) -> Optional[TradeSignal]:
     from_date = (date.today() - timedelta(days=420)).strftime("%Y-%m-%d")
     to_date = date.today().strftime("%Y-%m-%d")
 
+    from ledger.db import log_cycle_evaluation
+    cycle_at = date.today().strftime("%Y-%m-%d") + " " + __import__("datetime").datetime.now().strftime("%H:%M:%S")
+
     best_signal: Optional[TradeSignal] = None
     best_confidence = 0.0
 
@@ -526,11 +529,16 @@ def generate_signal(regime_reading: RegimeReading) -> Optional[TradeSignal]:
         info = instruments_map.get(ticker)
         if not info:
             log.warning(f"No instrument token for {ticker} on NSE or BSE — skipping")
+            for strategy in baskets:
+                log_cycle_evaluation(
+                    cycle_at=cycle_at, regime=regime.value,
+                    regime_confidence=regime_reading.confidence,
+                    ticker=ticker, exchange=exchange_map.get(ticker, "NSE"),
+                    strategy=strategy["name"], verdict="NO_TOKEN",
+                )
             continue
 
         token = info["token"]
-        # Use exchange from instruments_map (what Kite actually has) but respect
-        # the CSV exchange hint for BSE-only stocks not on NSE.
         resolved_exchange = info["exchange"]
 
         # Fetch OHLCV history
@@ -538,10 +546,25 @@ def generate_signal(regime_reading: RegimeReading) -> Optional[TradeSignal]:
             hist = kite.historical_data(int(token), from_date, to_date, "day")
             if len(hist) < 30:
                 log.debug(f"{ticker}: insufficient history ({len(hist)} bars)")
+                for strategy in baskets:
+                    log_cycle_evaluation(
+                        cycle_at=cycle_at, regime=regime.value,
+                        regime_confidence=regime_reading.confidence,
+                        ticker=ticker, exchange=resolved_exchange,
+                        strategy=strategy["name"], verdict=f"THIN_HISTORY ({len(hist)} bars)",
+                    )
                 continue
             indicators = _compute_indicators(hist, ticker)
         except Exception as e:
             log.error(f"History fetch failed for {ticker} ({resolved_exchange}): {e}")
+            for strategy in baskets:
+                log_cycle_evaluation(
+                    cycle_at=cycle_at, regime=regime.value,
+                    regime_confidence=regime_reading.confidence,
+                    ticker=ticker, exchange=resolved_exchange,
+                    strategy=strategy["name"], verdict="ERROR",
+                    rationale=str(e),
+                )
             continue
 
         # Fetch qualitative context once per ticker (shared across strategies)
@@ -556,22 +579,59 @@ def generate_signal(regime_reading: RegimeReading) -> Optional[TradeSignal]:
             log.debug(f"Evaluating {ticker} ({resolved_exchange}) / {strategy['name']}")
             verdict = _call_claude(regime, strategy, indicators, qual_context=qual_context)
             if not verdict:
-                continue
-
-            if verdict.get("verdict") != "TRADE":
-                log.debug(f"  PASS — {verdict.get('rationale', '')[:80]}")
+                log_cycle_evaluation(
+                    cycle_at=cycle_at, regime=regime.value,
+                    regime_confidence=regime_reading.confidence,
+                    ticker=ticker, exchange=resolved_exchange,
+                    strategy=strategy["name"], verdict="ERROR",
+                    indicators=indicators, rationale="Claude API call failed or returned invalid JSON",
+                )
                 continue
 
             confidence = float(verdict.get("confidence_score", 0))
+            tech_score = float(verdict.get("technical_score", 0))
+            fund_score = float(verdict.get("fundamental_score", 0))
+            rationale  = verdict.get("rationale", "")
+
+            if verdict.get("verdict") != "TRADE":
+                log.debug(f"  PASS — {rationale[:80]}")
+                log_cycle_evaluation(
+                    cycle_at=cycle_at, regime=regime.value,
+                    regime_confidence=regime_reading.confidence,
+                    ticker=ticker, exchange=resolved_exchange,
+                    strategy=strategy["name"], verdict="PASS",
+                    indicators=indicators,
+                    technical_score=tech_score, fundamental_score=fund_score,
+                    confidence_score=confidence, rationale=rationale,
+                )
+                continue
+
             if confidence < MIN_CONFIDENCE:
-                log.debug(f"  Confidence {confidence:.0f}% < threshold {MIN_CONFIDENCE:.0f}%")
+                log.debug(f"  Below threshold: {confidence:.0f}% < {MIN_CONFIDENCE:.0f}%")
+                log_cycle_evaluation(
+                    cycle_at=cycle_at, regime=regime.value,
+                    regime_confidence=regime_reading.confidence,
+                    ticker=ticker, exchange=resolved_exchange,
+                    strategy=strategy["name"], verdict=f"BELOW_THRESHOLD ({confidence:.0f}%)",
+                    indicators=indicators,
+                    technical_score=tech_score, fundamental_score=fund_score,
+                    confidence_score=confidence, rationale=rationale,
+                )
                 continue
 
             log.info(
                 f"Candidate: {ticker} ({resolved_exchange}) / {strategy['name']} "
                 f"— confidence {confidence:.0f}% | "
-                f"tech {verdict.get('technical_score', 0):.0f} / "
-                f"fund {verdict.get('fundamental_score', 0):.0f}"
+                f"tech {tech_score:.0f} / fund {fund_score:.0f}"
+            )
+            log_cycle_evaluation(
+                cycle_at=cycle_at, regime=regime.value,
+                regime_confidence=regime_reading.confidence,
+                ticker=ticker, exchange=resolved_exchange,
+                strategy=strategy["name"], verdict="TRADE",
+                indicators=indicators,
+                technical_score=tech_score, fundamental_score=fund_score,
+                confidence_score=confidence, rationale=rationale,
             )
 
             if confidence > best_confidence:
@@ -583,11 +643,11 @@ def generate_signal(regime_reading: RegimeReading) -> Optional[TradeSignal]:
                     regime=regime,
                     strategy_bucket=strategy["name"],
                     direction="BUY",
-                    technical_score=float(verdict.get("technical_score", 0)),
-                    fundamental_score=float(verdict.get("fundamental_score", 0)),
+                    technical_score=tech_score,
+                    fundamental_score=fund_score,
                     confidence_score=confidence,
                     rationale=(
-                        f"{verdict.get('rationale', '')} "
+                        f"{rationale} "
                         f"[tech {indicators['rsi_14']} RSI | "
                         f"{indicators['supertrend_10_3']} ST | "
                         f"{indicators['volume_ratio_20d']:.1f}x vol | "

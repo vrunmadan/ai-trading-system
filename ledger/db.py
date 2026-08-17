@@ -21,13 +21,15 @@ def init_db():
     with sqlite3.connect(DB_PATH) as conn:
         with open(SCHEMA_PATH) as f:
             conn.executescript(f.read())
-        # Migration: add exchange column to signals if it doesn't exist yet
-        # (for existing Railway deployments that ran before this column was added)
-        try:
-            conn.execute("ALTER TABLE signals ADD COLUMN exchange TEXT NOT NULL DEFAULT 'NSE'")
-            conn.commit()
-        except sqlite3.OperationalError:
-            pass  # Column already exists — normal on fresh init
+        # Idempotent migrations for existing Railway deployments
+        for migration in [
+            "ALTER TABLE signals ADD COLUMN exchange TEXT NOT NULL DEFAULT 'NSE'",
+        ]:
+            try:
+                conn.execute(migration)
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass  # Column already exists — normal on fresh init
     print(f"Ledger initialized at {DB_PATH}")
 
 
@@ -251,6 +253,64 @@ def get_kite_token() -> str | None:
             return row[0] if row else None
     except Exception:
         return None
+
+
+# ---------------------------------------------------------------------------
+# Cycle evaluation log (every stock × strategy evaluated, including PASSes)
+# ---------------------------------------------------------------------------
+
+def log_cycle_evaluation(
+    cycle_at: str,
+    regime: str,
+    regime_confidence: float,
+    ticker: str,
+    exchange: str,
+    strategy: str,
+    verdict: str,
+    indicators: dict | None = None,
+    technical_score: float | None = None,
+    fundamental_score: float | None = None,
+    confidence_score: float | None = None,
+    rationale: str | None = None,
+) -> None:
+    """
+    Log one stock × strategy evaluation to cycle_log.
+    Called for every ticker in generate_signal(), including PASSes and errors.
+    This is what lets you see why no signals fired.
+    """
+    ind = indicators or {}
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO cycle_log (
+                cycle_at, regime, regime_confidence, ticker, exchange, strategy,
+                verdict, technical_score, fundamental_score, confidence_score,
+                rsi, supertrend, volume_ratio, pct_from_52wk_high, bollinger_position,
+                above_sma50, rationale
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                cycle_at, regime, regime_confidence, ticker, exchange, strategy,
+                verdict, technical_score, fundamental_score, confidence_score,
+                ind.get("rsi_14"), ind.get("supertrend_10_3"), ind.get("volume_ratio_20d"),
+                ind.get("pct_from_52wk_high"), ind.get("bollinger_position"),
+                int(ind.get("above_sma50", False)), rationale,
+            ),
+        )
+
+
+def get_cycle_log(days: int = 3) -> list[dict]:
+    """Return all cycle_log rows from the last N days, newest first."""
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM cycle_log
+            WHERE cycle_at >= datetime('now', ? || ' days')
+            ORDER BY cycle_at DESC, ticker
+            """,
+            (f"-{days}",),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 # ---------------------------------------------------------------------------

@@ -561,6 +561,164 @@ def diagnose_cycle():
 
 
 # ---------------------------------------------------------------------------
+# Cycle history endpoint — shows every stock evaluated, with all scores
+# ---------------------------------------------------------------------------
+
+@app.route("/cycle_history", methods=["GET"])
+def cycle_history():
+    """
+    Shows every stock × strategy evaluated across recent cycles, including PASS verdicts.
+    This is the "why nothing fired" answer.
+
+    Query params:
+      days=N   — how many days back (default 1)
+      secret=  — required
+
+    Usage:
+      https://ai-trading-system-production-6af9.up.railway.app/cycle_history?secret=<APPROVAL_SECRET>&days=1
+    """
+    from flask import make_response
+
+    secret = request.args.get("secret", "")
+    expected = os.getenv("APPROVAL_SECRET", "")
+    if not expected or secret != expected:
+        return make_response(_html_response("Forbidden", "Wrong or missing secret.", False), 403)
+
+    try:
+        import datetime, pytz
+        from ledger.db import get_cycle_log
+
+        days = int(request.args.get("days", "1"))
+        rows = get_cycle_log(days=days)
+
+        IST = pytz.timezone("Asia/Kolkata")
+        now_ist = datetime.datetime.now(IST).strftime("%Y-%m-%d %H:%M IST")
+
+        if not rows:
+            return make_response(
+                _html_response(
+                    "No data yet",
+                    f"No cycle evaluations found in the last {days} day(s). "
+                    "Data is stored from the next cycle onward after this deploy.",
+                    False,
+                ),
+                200,
+            )
+
+        # Group by cycle_at
+        from collections import defaultdict
+        cycles = defaultdict(list)
+        for r in rows:
+            cycles[r["cycle_at"]].append(r)
+
+        verdict_color = {
+            "TRADE": "#22c55e", "PASS": "#6b7280",
+            "NO_TOKEN": "#ef4444", "ERROR": "#ef4444",
+        }
+
+        def _vcolor(v):
+            for k, c in verdict_color.items():
+                if v.startswith(k):
+                    return c
+            return "#f59e0b"  # BELOW_THRESHOLD
+
+        def _score_cell(val, low_good=False):
+            if val is None:
+                return "<td style='color:#ccc'>—</td>"
+            v = float(val)
+            if low_good:
+                color = "#22c55e" if v < 35 else ("#f59e0b" if v < 50 else "#6b7280")
+            else:
+                color = "#22c55e" if v >= 75 else ("#f59e0b" if v >= 60 else "#ef4444")
+            return f"<td style='color:{color};font-weight:600'>{v:.0f}</td>"
+
+        sections = ""
+        for cycle_ts in sorted(cycles.keys(), reverse=True):
+            cycle_rows = cycles[cycle_ts]
+            regime = cycle_rows[0]["regime"].upper() if cycle_rows else "?"
+            reg_conf = cycle_rows[0]["regime_confidence"] or 0
+            regime_ok = reg_conf >= 60
+
+            table_body = ""
+            for r in sorted(cycle_rows, key=lambda x: -(x["confidence_score"] or 0)):
+                vc = _vcolor(r["verdict"])
+                st = r.get("supertrend", "?") or "?"
+                st_short = "G↑" if st == "GREEN" else ("R↓" if st == "RED" else "?")
+                table_body += f"""<tr style='border-bottom:1px solid #f1f5f9'>
+                  <td style='padding:5px 8px;font-weight:600'>{r['ticker']}</td>
+                  <td style='font-size:11px;color:#555'>{r['exchange']}</td>
+                  <td style='font-size:11px'>{r['strategy']}</td>
+                  <td style='padding:5px 8px;color:{vc};font-weight:700;font-size:12px'>{r['verdict']}</td>
+                  {_score_cell(r['technical_score'])}{_score_cell(r['fundamental_score'])}{_score_cell(r['confidence_score'])}
+                  <td style='font-size:11px'>{r['rsi']:.0f if r['rsi'] else '—'}</td>
+                  <td style='font-size:11px'>{st_short}</td>
+                  <td style='font-size:11px'>{f"{r['volume_ratio']:.1f}×" if r['volume_ratio'] else '—'}</td>
+                  <td style='font-size:11px'>{f"{r['pct_from_52wk_high']:+.1f}%" if r['pct_from_52wk_high'] is not None else '—'}</td>
+                  <td style='font-size:11px;color:#64748b;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'>{(r['rationale'] or '')[:120]}</td>
+                </tr>"""
+
+            trade_count = sum(1 for r in cycle_rows if r["verdict"] == "TRADE")
+            best_score  = max((r["confidence_score"] or 0) for r in cycle_rows)
+
+            sections += f"""
+<div style='background:#fff;border-radius:8px;padding:16px;margin-bottom:20px;
+            box-shadow:0 1px 4px rgba(0,0,0,.08)'>
+  <div style='display:flex;align-items:center;gap:12px;margin-bottom:12px'>
+    <strong style='font-size:15px'>{cycle_ts}</strong>
+    <span style='padding:2px 10px;border-radius:99px;font-size:12px;font-weight:700;color:#fff;
+                 background:{"#22c55e" if regime_ok else "#ef4444"}'>{regime}</span>
+    <span style='font-size:12px;color:#64748b'>{reg_conf:.0f}% confidence
+      {"✓" if regime_ok else "⚠ SKIPPED (< 60%)"}</span>
+    <span style='font-size:12px;color:#64748b;margin-left:auto'>
+      {len(cycle_rows)} evaluated · best score: <strong>{best_score:.0f}%</strong> ·
+      signals above 75%: <strong style='color:{"#22c55e" if trade_count else "#6b7280"}'>{trade_count}</strong>
+    </span>
+  </div>
+  <div style='overflow-x:auto'>
+  <table style='width:100%;border-collapse:collapse;font-size:12px'>
+    <thead><tr style='background:#f8fafc'>
+      <th style='padding:6px 8px;text-align:left'>Ticker</th>
+      <th style='padding:6px 8px;text-align:left'>Exch</th>
+      <th style='padding:6px 8px;text-align:left'>Strategy</th>
+      <th style='padding:6px 8px;text-align:left'>Verdict</th>
+      <th style='padding:6px 8px'>Tech</th>
+      <th style='padding:6px 8px'>Fund</th>
+      <th style='padding:6px 8px'>Conf</th>
+      <th style='padding:6px 8px'>RSI</th>
+      <th style='padding:6px 8px'>ST</th>
+      <th style='padding:6px 8px'>Vol</th>
+      <th style='padding:6px 8px'>52wk</th>
+      <th style='padding:6px 8px;text-align:left'>Rationale</th>
+    </tr></thead>
+    <tbody>{table_body}</tbody>
+  </table>
+  </div>
+</div>"""
+
+        html = f"""<!DOCTYPE html>
+<html><head><meta name='viewport' content='width=device-width,initial-scale=1'>
+<title>Cycle History</title>
+<style>body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  padding:20px;background:#f8fafc;color:#1e293b}}
+h1{{font-size:20px;margin:0 0 4px}}
+th{{text-align:center}}</style></head>
+<body>
+<h1>📊 Cycle Evaluation History</h1>
+<p style='color:#64748b;margin:0 0 20px'>Last {days} day(s) — generated {now_ist}<br>
+<strong style='color:#22c55e'>Green ≥ 75</strong> ·
+<strong style='color:#f59e0b'>Amber 60–74</strong> ·
+<strong style='color:#ef4444'>Red &lt; 60</strong> (confidence column = threshold)</p>
+{sections}
+</body></html>"""
+
+        return make_response(html, 200)
+
+    except Exception as e:
+        log.error(f"/cycle_history error: {e}", exc_info=True)
+        return make_response(_html_response("Error", str(e), False), 500)
+
+
+# ---------------------------------------------------------------------------
 # Universe diagnostic endpoint — checks CSV vs Kite live instrument list
 # ---------------------------------------------------------------------------
 

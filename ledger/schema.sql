@@ -58,6 +58,29 @@ CREATE TABLE IF NOT EXISTS weekly_audits (
     model_used TEXT DEFAULT 'gemini-3.5-pro'
 );
 
+-- Per-stock evaluation log — every stock evaluated in every cycle, including PASSes.
+-- This is what lets you see "why nothing fired today" without reading Railway logs.
+CREATE TABLE IF NOT EXISTS cycle_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cycle_at TEXT NOT NULL,             -- timestamp of the cycle run
+    regime TEXT NOT NULL,               -- regime at time of evaluation
+    regime_confidence REAL,             -- regime confidence %
+    ticker TEXT NOT NULL,
+    exchange TEXT NOT NULL DEFAULT 'NSE',
+    strategy TEXT NOT NULL,             -- strategy name evaluated
+    verdict TEXT NOT NULL,              -- TRADE / PASS / ERROR / NO_TOKEN / THIN_HISTORY
+    technical_score REAL,               -- 0-100 (null if Claude call failed)
+    fundamental_score REAL,             -- 0-100
+    confidence_score REAL,              -- 0-100 (the number that must reach 75)
+    rsi REAL,
+    supertrend TEXT,
+    volume_ratio REAL,
+    pct_from_52wk_high REAL,
+    bollinger_position REAL,
+    above_sma50 INTEGER,                -- 1/0
+    rationale TEXT                      -- Claude's rationale (or error message)
+);
+
 -- Portfolio peak tracking for drawdown circuit breaker.
 -- Only ever has ONE row (upserted each cycle).
 CREATE TABLE IF NOT EXISTS portfolio_peak (
