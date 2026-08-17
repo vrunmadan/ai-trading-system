@@ -377,8 +377,11 @@ def diagnose_cycle():
         kite = KiteConnect(api_key=os.getenv("KITE_API_KEY"))
         kite.set_access_token(token)
 
-        # Step 2: Regime
-        regime_reading = classify_regime()
+        # Step 2: Regime — apply_inertia=False: this is an on-demand debug
+        # endpoint the user can hit repeatedly while troubleshooting; it
+        # shouldn't consume slots in the hourly cycle's regime-inertia
+        # smoothing window (see classify_regime()'s docstring).
+        regime_reading = classify_regime(apply_inertia=False)
         baskets = STRATEGY_BASKETS.get(regime_reading.regime, [])
 
         # Step 3: Instruments maps

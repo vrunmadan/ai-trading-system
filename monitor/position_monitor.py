@@ -93,7 +93,10 @@ def check_open_positions() -> None:
     current_regime: str | None = None
     try:
         from researcher.regime_classifier import classify_regime
-        regime_reading = classify_regime()
+        # apply_inertia=False: this EOD check runs outside the hourly research
+        # cycle and shouldn't consume a slot in its regime-inertia smoothing —
+        # see classify_regime()'s docstring.
+        regime_reading = classify_regime(apply_inertia=False)
         current_regime = regime_reading.regime.value
         log.info(f"Current regime for position monitor: {current_regime}")
     except Exception as e:

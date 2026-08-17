@@ -327,13 +327,21 @@ def _map_score_to_regime(
 # Main public function
 # ---------------------------------------------------------------------------
 
-def classify_regime() -> RegimeReading:
+def classify_regime(apply_inertia: bool = True) -> RegimeReading:
     """
     Fetches real Kite Connect market data and classifies the current regime.
     This is deterministic Python math — no LLM.
 
     Requires KITE_API_KEY + KITE_ACCESS_TOKEN in .env and a valid daily session.
     Run setup/refresh_kite_token.py each morning before 9:15 AM.
+
+    apply_inertia: when True (default), this reading participates in the
+    hourly-cycle regime-inertia smoothing (_regime_history) and may hold the
+    previous regime instead of a freshly-detected transition. Callers outside
+    the hourly research cycle (e.g. the EOD position monitor, which needs the
+    actual current regime for invalidation checks, not a smoothed one) should
+    pass False so their call doesn't consume a slot in the smoothing window
+    the hourly cycle relies on.
     """
     global _regime_history
 
@@ -369,24 +377,26 @@ def classify_regime() -> RegimeReading:
     raw_regime, raw_confidence = _map_score_to_regime(score, nifty_vs_ema, vix)
 
     # ---------------------------------------------------------------------------
-    # Inertia smoothing — require N consecutive identical readings before switching
+    # Inertia smoothing — require N consecutive identical readings before switching.
+    # Only applies to calls that opt in (apply_inertia=True) — see docstring.
     # ---------------------------------------------------------------------------
-    _regime_history.append(raw_regime)
-    _regime_history = _regime_history[-REGIME_INERTIA_PERIODS:]  # keep only recent N
-
     confirmed_regime = raw_regime
     confidence = raw_confidence
 
-    if len(_regime_history) >= 2:
-        prev = _regime_history[-2]
-        if prev != raw_regime:
-            # Transition detected — hold previous regime, drop confidence
-            confirmed_regime = prev
-            confidence = max(40.0, raw_confidence - 25.0)
-            rationale_parts.append(
-                f"⚠ Transition {prev.value} → {raw_regime.value} detected. "
-                f"Holding {prev.value} until confirmed next cycle."
-            )
+    if apply_inertia:
+        _regime_history.append(raw_regime)
+        _regime_history = _regime_history[-REGIME_INERTIA_PERIODS:]  # keep only recent N
+
+        if len(_regime_history) >= 2:
+            prev = _regime_history[-2]
+            if prev != raw_regime:
+                # Transition detected — hold previous regime, drop confidence
+                confirmed_regime = prev
+                confidence = max(40.0, raw_confidence - 25.0)
+                rationale_parts.append(
+                    f"⚠ Transition {prev.value} → {raw_regime.value} detected. "
+                    f"Holding {prev.value} until confirmed next cycle."
+                )
 
     rationale = " | ".join(rationale_parts)
     log.info(
