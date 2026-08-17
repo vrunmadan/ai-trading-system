@@ -193,13 +193,21 @@ def kite_callback():
 def status():
     """
     Returns JSON health of every system component.
-    No secret required — read-only and contains no sensitive values.
+    Requires ?secret=<APPROVAL_SECRET> — same gate as the other diagnostic
+    routes. Booleans only; no capital amounts, email addresses, or token
+    values are returned, even to an authenticated caller.
 
     Usage:
-      https://ai-trading-system-production-6af9.up.railway.app/status
+      https://ai-trading-system-production-6af9.up.railway.app/status?secret=<APPROVAL_SECRET>
     """
     import datetime
     import pytz
+    from flask import make_response
+
+    secret = request.args.get("secret", "")
+    expected = os.getenv("APPROVAL_SECRET", "")
+    if not expected or secret != expected:
+        return make_response(jsonify({"error": "Wrong or missing secret."}), 403)
 
     checks = {}
 
@@ -209,8 +217,7 @@ def status():
     checks["email"] = {
         "resend_api_key_set": bool(resend_key),
         "alert_email_set":    bool(alert_email),
-        "alert_email_value":  alert_email or "(not set)",
-        "resend_from":        os.getenv("RESEND_FROM", "(not set)"),
+        "resend_from_set":    bool(os.getenv("RESEND_FROM")),
         "ok":                 bool(resend_key and alert_email),
     }
 
@@ -220,7 +227,6 @@ def status():
         token = get_kite_token()
         checks["kite_token"] = {
             "present": bool(token),
-            "prefix":  (token[:8] + "...") if token else None,
             "note":    "Token expires at midnight IST each day — must click morning login email",
             "ok":      bool(token),
         }
@@ -274,7 +280,7 @@ def status():
     # 7. Other env vars
     checks["env"] = {
         "paper_mode":         os.getenv("PAPER_MODE", "true"),
-        "total_capital_inr":  os.getenv("TOTAL_CAPITAL_INR", "(not set)"),
+        "total_capital_set":  bool(os.getenv("TOTAL_CAPITAL_INR")),
         "approval_secret_set": bool(os.getenv("APPROVAL_SECRET", "")),
         "google_sheets_set":  bool(os.getenv("GOOGLE_SHEETS_CREDENTIALS_JSON")),
     }
