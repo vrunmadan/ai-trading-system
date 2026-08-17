@@ -151,12 +151,16 @@ def run_cycle() -> None:
         log.error(f"QC failed: {e}", exc_info=True)
         return
 
-    if qc_verdict.verdict == "DISAGREE":
-        log.info(f"QC DISAGREE — {qc_verdict.rationale[:120]}")
+    if qc_verdict.verdict != "AGREE":
+        # NEEDS_MORE_DATA is documented as a safe default that blocks the
+        # trade (qc_factchecker/validator.py) — it must gate here too, not
+        # just DISAGREE, or a QC API outage/missing key/parse error ships
+        # the signal exactly as if QC had passed.
+        log.info(f"QC {qc_verdict.verdict} — {qc_verdict.rationale[:120]}")
         return
 
     # ----------------------------------------------------------------
-    # Step 5: Log signal + send Telegram alert + mirror to Sheets
+    # Step 5: Log signal + send Gmail alert + mirror to Sheets
     # ----------------------------------------------------------------
     try:
         signal_id = log_signal(signal, sizing, qc_verdict)
