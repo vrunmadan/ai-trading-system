@@ -40,7 +40,7 @@ IST = pytz.timezone("Asia/Kolkata")
 
 ALERT_EMAIL     = os.getenv("ALERT_EMAIL", "")
 RAILWAY_URL     = os.getenv("RAILWAY_URL", "http://localhost:8080").rstrip("/")
-APPROVAL_SECRET = os.getenv("APPROVAL_SECRET", "change-me-in-dotenv")
+APPROVAL_SECRET = os.getenv("APPROVAL_SECRET", "")
 
 # Resend HTTP API — works on Railway (port 443). No SMTP needed.
 # Sign up free at resend.com, copy your API key, set RESEND_API_KEY in Railway.
@@ -73,6 +73,9 @@ def _make_token(action: str, signal_id: int) -> str:
 
 
 def verify_token(action: str, signal_id: int, token: str) -> bool:
+    if not APPROVAL_SECRET:
+        log.error("APPROVAL_SECRET is not set — refusing to verify any approve/reject token.")
+        return False
     expected = _make_token(action, signal_id)
     return hmac.compare_digest(expected, token)
 
