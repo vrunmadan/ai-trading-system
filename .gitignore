@@ -23,3 +23,6 @@ ledger/*.db
 # OS
 .DS_Store
 Thumbs.db
+
+# gstack local artifacts (security reports, etc.) — never commit
+.gstack/
