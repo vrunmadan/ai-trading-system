@@ -1,15 +1,17 @@
 """
 Gmail alert + approve/reject flow.
 
-Replaces telegram_bot.py — same contract, different transport.
-
 Flow:
   1. send_trade_alert() emails you a signal with two big links:
        https://your-app.railway.app/email_action?action=approve&id=<n>&token=<hmac>
        https://your-app.railway.app/email_action?action=reject&id=<n>&token=<hmac>
   2. You tap one from your phone. Browser GETs the link.
   3. webhook_server.py verifies the HMAC token and calls handle_email_action().
-  4. handle_email_action() fires execute_trade() or logs rejection.
+  4. On approve, handle_email_action() marks the signal APPROVED and returns a
+     Kite Connect basket-order URL — the caller (webhook_server.py) redirects
+     your browser there, and you place the order yourself inside Kite's own
+     UI. No server-side execute_trade() call happens on this path.
+  5. On reject, it marks the signal REJECTED and logs it.
 
 Required .env keys:
   GMAIL_APP_PASSWORD   — Google App Password (not your account password).
@@ -20,7 +22,7 @@ Required .env keys:
   APPROVAL_SECRET      — Random string used to sign approve/reject tokens.
                          Generate with: python -c "import secrets; print(secrets.token_hex(32))"
 
-Locked behaviour (same as Telegram version):
+Locked behaviour:
   - Alert window = FULL TRADING DAY
   - No response by market close = NO TRADE, logged as missed opportunity
   - Auto-fire on timeout is explicitly disabled until month 4+ review
@@ -123,13 +125,16 @@ def _send_email(subject: str, html_body: str, plain_body: str = "") -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Public API — mirrors telegram_bot.py interface
+# Public API
 # ---------------------------------------------------------------------------
 
 def send_plain_email(subject: str, body: str) -> bool:
     """
     Send a plain-text notification email. Used for alerts and status updates.
-    Replaces send_plain_message() from telegram_bot.
+    Rendered as monospace <pre> HTML, so whitespace is preserved exactly as
+    written — but this means it is NOT a Markdown renderer. Callers must not
+    pass Telegram/Markdown-style formatting (*bold*, _italic_) expecting it
+    to render; it will show up as literal asterisks/underscores.
     """
     html = f"<pre style='font-family:monospace;font-size:14px'>{body}</pre>"
     return _send_email(subject, html, plain_body=body)

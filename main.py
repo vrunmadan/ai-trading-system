@@ -188,7 +188,7 @@ def run_cycle() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Scheduled job wrappers (called by scheduler/market_scheduler.py)
+# Scheduled job wrappers (called by webhook_server.py's _start_scheduler())
 # ---------------------------------------------------------------------------
 
 def run_eod_sweep() -> None:

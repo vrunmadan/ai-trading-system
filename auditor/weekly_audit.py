@@ -17,7 +17,7 @@ Two mandatory jobs (kept strictly separate):
      hypothesis_backlog — NOT directly to the live Researcher prompt.
      Paper-test before live adoption. Always.
 
-Output is written to the weekly_audits table. A Telegram alert fires only
+Output is written to the weekly_audits table. A Gmail alert fires only
 when the auditor raises a calibration flag (serious systemic issue).
 """
 
@@ -247,9 +247,9 @@ Please analyze and return your audit as JSON."""
     except Exception as e:
         log.warning(f"Sheets audit log failed (non-critical): {e}")
 
-    # Calibration flag → Telegram alert
+    # Calibration flag → Gmail alert
     if audit_data.get("calibration_flag"):
-        log.warning("⚠ CALIBRATION FLAG raised by Auditor — sending Telegram alert")
+        log.warning("⚠ CALIBRATION FLAG raised by Auditor — sending Gmail alert")
         _send_calibration_alert(
             week_start, week_end,
             audit_data.get("summary", ""),

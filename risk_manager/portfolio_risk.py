@@ -3,7 +3,7 @@ Portfolio-level risk gate — runs at the START of every research cycle,
 before the regime classifier or signal generator even runs.
 
 If any circuit breaker trips, the entire cycle halts immediately.
-No new signals are generated. A Telegram alert is sent.
+No new signals are generated. A Gmail alert is sent.
 
 Circuit breakers (all configurable via .env):
   MAX_DRAWDOWN_PCT       - halt if portfolio drops X% below its all-time peak

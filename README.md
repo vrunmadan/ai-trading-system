@@ -7,7 +7,7 @@ the pipeline has been validated end-to-end in paper mode first.
 ## Architecture
 
 ```
-Researcher  -->  Risk Sizer  -->  QC / Fact-Checker  -->  Telegram Alert
+Researcher  -->  Risk Sizer  -->  QC / Fact-Checker  -->  Gmail Alert
    (Claude)        (rules)          (GPT-5.5)             (approve/reject,
                                                             full trading-day
                                                             window, defaults
@@ -60,7 +60,10 @@ for bull, mean-reversion for sideways, defensive/cash-heavy for crash, etc.)
 2. **Anthropic API key** (console.anthropic.com) — Researcher.
 3. **OpenAI API key** (platform.openai.com) — QC/Fact-Checker (GPT-5.5).
 4. **Google AI Studio key** (aistudio.google.com) — Auditor (Gemini 3.5 Pro).
-5. **Telegram bot token** — message @BotFather in Telegram, `/newbot`.
+5. **Resend API key** (resend.com, free tier) + your Gmail address — used to
+   send the approve/reject alert email. See `alerts/gmail_alert.py` for the
+   full list of required `.env` keys (`RESEND_API_KEY`, `ALERT_EMAIL`,
+   `RAILWAY_URL`, `APPROVAL_SECRET`).
 6. **Hosting** — Railway.app (or your own VPS) for the always-on backend.
    Claude Cowork / Desktop scheduled tasks stop when the desktop sleeps, so
    this pipeline cannot live there long-term.
@@ -75,7 +78,7 @@ ever put them in `.env`, which should stay out of version control.
 2. Researcher — regime classification + signal generation, paper data only
 3. Risk Sizer — position sizing + exposure/correlation check
 4. QC/Fact-Checker — independent model, adversarial validation
-5. Telegram alert + approve/reject webhook
+5. Gmail alert + approve/reject webhook
 6. Trader — Kite Connect wrapper, paper mode first
 7. Monitor — daily open-position check
 8. Auditor — weekly shadow-backtest + hypothesis backlog
@@ -101,22 +104,15 @@ git push -u origin main
 3. Railway auto-deploys from your `main` branch. The `railway.json` and `Procfile`
    tell it to run `python webhook_server.py`.
 
-**Step 3 — Set Telegram webhook**
+**Step 3 — Verify**
 ```bash
-python setup/set_telegram_webhook.py https://your-app.railway.app
-```
-
-**Step 4 — Verify**
-```bash
-python setup/set_telegram_webhook.py --info   # should show your URL
 # Visit https://your-app.railway.app/health   # should return {"status": "ok"}
 ```
+Trade approval runs over Gmail (see "What you need to set up" above) — no webhook
+registration needed, the approve/reject links in the alert email are self-contained.
 
 **Local testing** (before Railway):
 ```bash
-# Install ngrok (ngrok.com), then:
-ngrok http 8080
-python setup/set_telegram_webhook.py https://xxxx.ngrok-free.app
 python webhook_server.py   # runs scheduler + webhook server locally
 ```
 

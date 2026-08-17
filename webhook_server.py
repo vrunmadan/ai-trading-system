@@ -10,7 +10,10 @@ Architecture:
   - Flask receives GET /email_action?action=approve&id=<n>&token=<hmac>
   - Verifies the HMAC token (signed with APPROVAL_SECRET) to prevent forgery
   - Dispatches to alerts.gmail_alert.handle_email_action()
-  - handle_email_action() calls execute_trade() if approved, logs if rejected
+  - On approve: marks the signal APPROVED and redirects the browser to a Kite
+    Connect basket-order URL — the user still taps "Place Order" inside their
+    own authenticated Kite session. No server-side order placement happens here.
+  - On reject: marks the signal REJECTED, no further action.
   - Returns a simple HTML confirmation page the user sees in their phone browser
 
 Setup:

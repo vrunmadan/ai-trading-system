@@ -80,17 +80,18 @@ def check_google():
     assert resp.text, "No response from Google"
 
 
-@test("Telegram bot (send test message)")
-def check_telegram():
+@test("Resend (approve/reject alert email)")
+def check_resend():
     import requests
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
-    assert token and chat_id, "TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID missing in .env"
-    r = requests.post(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        json={"chat_id": chat_id, "text": "AI Trading System: connection test OK ✓"},
+    key = os.getenv("RESEND_API_KEY")
+    alert_email = os.getenv("ALERT_EMAIL")
+    assert key and alert_email, "RESEND_API_KEY or ALERT_EMAIL missing in .env"
+    # Read-only call — verifies the key is valid without sending a test email.
+    r = requests.get(
+        "https://api.resend.com/domains",
+        headers={"Authorization": f"Bearer {key}"},
     )
-    assert r.ok and r.json().get("ok"), f"Telegram error: {r.text}"
+    assert r.ok, f"Resend error: {r.status_code} {r.text}"
 
 
 @test("Ledger (SQLite init)")

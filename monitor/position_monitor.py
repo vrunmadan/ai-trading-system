@@ -6,7 +6,7 @@ For each open trade:
   2. Checks against stop-loss (entry_price × (1 - LONG_STOP_LOSS_PCT / 100))
   3. Checks if the regime has flipped against the entry thesis
   4. Writes result to position_checks table
-  5. Sends Telegram alert if status is INVALIDATED or WEAKENING
+  5. Sends a Gmail alert if status is INVALIDATED or WEAKENING
 
 Stop-loss default: 7% below entry price for long positions.
 Intent is to replace this with 2× ATR at entry time once ATR is logged
@@ -78,7 +78,7 @@ def _send_monitor_email(text: str) -> None:
 def check_open_positions() -> None:
     """
     Fetches all open positions from the ledger, runs checks, logs results,
-    and sends Telegram alerts for any action required.
+    and sends a Gmail alert for any action required.
     """
     from ledger.db import get_open_positions, get_db
 
@@ -178,7 +178,7 @@ def check_open_positions() -> None:
                 )
             notes = " | ".join(reasons)
             alerts.append(
-                f"🚨 *{mode_tag}EXIT ALERT — {ticker}*\n"
+                f"🚨 {mode_tag}EXIT ALERT — {ticker}\n"
                 f"{notes}\n"
                 f"Review and consider closing this position."
             )
@@ -191,7 +191,7 @@ def check_open_positions() -> None:
                 f"({pnl_pct:+.1f}%). Approaching stop at ₹{stop_price:.2f}."
             )
             alerts.append(
-                f"⚡ *{mode_tag}WEAKENING — {ticker}*\n"
+                f"⚡ {mode_tag}WEAKENING — {ticker}\n"
                 f"{notes}"
             )
             log.info(f"{ticker} WEAKENING: {notes}")
