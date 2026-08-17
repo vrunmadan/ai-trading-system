@@ -11,8 +11,11 @@ import os
 from contextlib import contextmanager
 from datetime import datetime
 
+import pytz
+
 DB_PATH = os.getenv("LEDGER_DB_PATH", "ledger/trading_ledger.db")
 SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "schema.sql")
+IST = pytz.timezone("Asia/Kolkata")
 
 
 def init_db():
@@ -50,8 +53,8 @@ def get_db():
 
 
 def now_ist() -> str:
-    """Current timestamp string for logging."""
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    """Current timestamp string for logging, in IST."""
+    return datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
 
 
 # ---------------------------------------------------------------------------
