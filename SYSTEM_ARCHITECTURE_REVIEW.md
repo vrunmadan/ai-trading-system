@@ -342,3 +342,36 @@ python streak_backtests/backtest.py --universe streak_backtests/nifty500.csv --t
 ---
 
 *End of document. The single most important thing for a reviewer to resolve first is Open Issue #1 (execution↔ledger linkage) — until then the system generates and approves signals but does not track resulting positions, so exits and portfolio risk are effectively dormant in the live path.*
+
+
+---
+
+<!-- AUTONOMOUS DECISION LOG -->
+## Decision Audit Trail
+
+Produced by `/autoplan` on 2026-08-19 (branch `main`, commit `0ecac28`).
+Restore point: `~/.gstack/projects/vrunmadan-ai-trading-system/main-autoplan-restore-20260819-172742.md`
+
+| # | Phase | Decision | Class | Principle | Rationale | Rejected |
+|---|-------|----------|-------|-----------|-----------|----------|
+| 1 | CEO 0C-bis | Approach C (compute qty + log trade at approval; no server-side order) | Taste | P5, P3 | Fixes C1-C4 without reintroducing server-side order placement, which the design deliberately removed | A (wire execute_trade), B (fill reconciler -> TODOS) |
+| 2 | CEO 0F | Mode = SELECTIVE EXPANSION | Mechanical | autoplan default | Feature iteration on an existing system | EXPANSION, HOLD, REDUCTION |
+| 3 | CEO S1 | Verify Railway volume; fail loudly if LEDGER_DB_PATH is non-persistent | Mechanical | P2 | Ledger loss on redeploy is silent and total | defer |
+| 4 | CEO S2 | Name a rescue action for all 6 error gaps; alert on GAP-A and GAP-B | Mechanical | P1 | Silent degradation of the exit system is indistinguishable from normal operation | log-only |
+| 5 | CEO S3 | compare_digest on diagnostics; split DIAGNOSTIC_SECRET from APPROVAL_SECRET; header not query param; generic error page; delimit untrusted headlines | Mechanical | P1, P5 | One-line fixes; secret reuse couples a log leak to approval forgery | defer S4 link expiry to TODOS |
+| 6 | CEO S4 | Compute quantity at approval from live LTP; write trade row; guard double-approve and post-sweep approval | Mechanical | P1, P2 | Email shows 0 shares, basket shows 1 share, intent is ~2 lakh | defer |
+| 7 | CEO S6 | Add tests: approval path, qty conversion, monitor exits, peak reconstruction, ledger round trip, prefilter golden set | Mechanical | P1 | Every critical finding lives in untested code | partial coverage |
+| 8 | CEO S7 | Per-day bar cache + rate limiting w/ backoff + batched cycle_log writes + index cycle_log(cycle_at) | Mechanical | P3 | 3,500 redundant fetches/day; 429s masquerade as quiet markets | defer |
+| 9 | CEO S8 | Daily summary gains a health block incl. explicit LEDGER row counts | Mechanical | P1 | Would have made the severed trades edge visible on day one | defer |
+| 10 | CEO S9 | PAPER_MODE must gate the approval path | Mechanical | P1, P5 | Approving in paper mode currently opens a real pre-filled Kite order | defer |
+| 11 | CEO S11 | Design phase skipped (no UI scope); approval-email content logged to TODOS | Mechanical | detection rule | Only false-positive UI matches; email is flagged separately | run design phase |
+| 12 | ENG S0 | Approach C scope = 5 files; complexity gate NOT triggered | Mechanical | eng rule | 5 files, 0 new classes/services, under the 8-file threshold | AskUserQuestion scope-reduction gate |
+| 13 | ENG S0 | Bundle TODOS item 5 (sequential generation + redundant news fetch) into scope | Mechanical | P2 | Same file, same cycle; the per-day cache fix touches it anyway | keep deferred |
+| 14 | ENG S3 | REGRESSION RULE fired: 5 tests added as critical requirements for commit 0ecac28 | Mechanical | iron rule | The exit redesign shipped with zero test coverage | AskUserQuestion (rule forbids) |
+| 15 | ENG S4 | Per-day bar cache + rate limiting + batched cycle_log + index | Mechanical | P3 | 3,500 redundant fetches/day; 429s render as quiet markets | defer |
+| 16 | DX | Regenerate .env.example from code (47 keys, 24 documented) | Mechanical | P1 | RESEND_API_KEY undocumented -> system is silently mute | defer |
+| 17 | DX | Add `python main.py doctor` preflight | Mechanical | P5 | Single command to answer "is it configured correctly" | defer |
+| 18 | DX | Rewrite README.md; make the architecture doc canonical | Mechanical | P4 DRY | README and the arch doc disagree about how the system works | leave both |
+| 19 | ENG-VOICE | Integrate 10 new findings from the independent Eng subagent into TODOS.md | Mechanical | P1 | Cold reader surfaced defects the primary pass missed; 4 spot-verified by re-execution | discard |
+| 20 | ENG-VOICE | Reorder work: fix the quantity bug BEFORE the ledger redesign | Mechanical | P5 | A PENDING trades row written from sized_quantity would record quantity 1 | original order |
+| 21 | ENG-VOICE | Accept the correction that breakers are dormant, not structurally dead | Mechanical | accuracy | execute_trade can still write rows if invoked from tests or manually | keep original wording |
