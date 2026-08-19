@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI Trading System — End-to-End Flow</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --line:#30363d;
+    --txt:#e6edf3; --mut:#8b949e; --dim:#6e7681;
+    --claude:#d97757; --gpt:#10a37f; --gemini:#4285f4;
+    --rules:#a371f7; --gate:#f59e0b; --danger:#ef4444; --ok:#3fb950;
+    --human:#58a6ff; --data:#e3b341;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+    line-height:1.5;padding:32px 20px 80px}
+  .wrap{max-width:1080px;margin:0 auto}
+  h1{font-size:26px;margin:0 0 4px;letter-spacing:-.3px}
+  .sub{color:var(--mut);font-size:14px;margin:0 0 24px}
+  .legend{display:flex;flex-wrap:wrap;gap:8px 16px;background:var(--panel);
+    border:1px solid var(--line);border-radius:12px;padding:14px 18px;margin-bottom:28px;font-size:12.5px}
+  .legend b{font-weight:600}
+  .chip{display:inline-flex;align-items:center;gap:6px}
+  .dot{width:11px;height:11px;border-radius:3px;display:inline-block}
+  .col{display:flex;flex-direction:column;align-items:center;gap:0}
+  .arrow{width:2px;height:26px;background:var(--line);position:relative}
+  .arrow:after{content:'';position:absolute;bottom:0;left:50%;transform:translateX(-50%);
+    border:5px solid transparent;border-top-color:var(--line)}
+  .arrow.lbl{height:44px}
+  .arrow .tag{position:absolute;left:14px;top:50%;transform:translateY(-50%);
+    white-space:nowrap;font-size:11.5px;color:var(--gate);font-weight:600}
+  .arrow .tag.ok{color:var(--ok)}
+  .card{width:100%;background:var(--panel);border:1px solid var(--line);
+    border-radius:14px;padding:18px 20px;position:relative}
+  .card.lead{border-left:4px solid var(--l,#30363d)}
+  .step{position:absolute;top:-11px;left:18px;background:var(--gate);color:#0d1117;
+    font-size:11px;font-weight:800;padding:2px 9px;border-radius:20px;letter-spacing:.3px}
+  .htag{display:inline-block;font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:20px;
+    margin-left:8px;vertical-align:middle;text-transform:uppercase;letter-spacing:.4px}
+  .t-claude{background:rgba(217,119,87,.18);color:var(--claude)}
+  .t-gpt{background:rgba(16,163,127,.18);color:var(--gpt)}
+  .t-gemini{background:rgba(66,133,244,.18);color:var(--gemini)}
+  .t-rules{background:rgba(163,113,247,.18);color:var(--rules)}
+  .t-human{background:rgba(88,166,255,.18);color:var(--human)}
+  .ctitle{font-size:17px;font-weight:700;margin:2px 0 3px}
+  .cwhat{color:var(--mut);font-size:12.5px;margin:0 0 12px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  @media(max-width:720px){.grid{grid-template-columns:1fr}}
+  .box{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:10px 12px;font-size:12.5px}
+  .box h4{margin:0 0 6px;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--dim);font-weight:700}
+  .box ul{margin:0;padding-left:16px} .box li{margin:3px 0}
+  .k{color:var(--data);font-weight:600;font-variant-numeric:tabular-nums}
+  .gate{color:var(--gate);font-weight:600}
+  .stop{color:var(--danger);font-weight:600}
+  .go{color:var(--ok);font-weight:600}
+  .full{grid-column:1/-1}
+  .note{font-size:11.5px;color:var(--dim);margin-top:10px;padding-top:10px;border-top:1px dashed var(--line)}
+  .sidebar{border-left:4px solid var(--human)}
+  .halt{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--danger);
+    background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.25);border-radius:8px;padding:7px 11px;margin-top:10px}
+  .sectionhdr{margin:34px 0 6px;font-size:12px;font-weight:700;color:var(--dim);
+    text-transform:uppercase;letter-spacing:1.2px;text-align:center}
+  .split{display:grid;grid-template-columns:1fr 1fr;gap:16px;width:100%}
+  @media(max-width:720px){.split{grid-template-columns:1fr}}
+  .modelfam{font-size:11px;color:var(--mut);margin-top:2px}
+  .banner{background:linear-gradient(90deg,rgba(217,119,87,.12),rgba(66,133,244,.10));
+    border:1px solid var(--line);border-radius:12px;padding:14px 18px;margin-bottom:26px;font-size:13px}
+  .banner b{color:var(--txt)}
+  .pill{font-size:11px;background:var(--panel2);border:1px solid var(--line);
+    padding:2px 9px;border-radius:20px;color:var(--mut);margin-right:6px;display:inline-block;margin-top:4px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>AI Trading System — full end-to-end flow</h1>
+  <p class="sub">Indian equities · long-only · human-in-the-loop · <b>PAPER_MODE default</b> · deployed always-on on Railway (Flask + APScheduler in one process). Every threshold below is the code default (overridable via <code>.env</code>).</p>
+
+  <div class="banner">
+    <b>Three independent model families, on purpose.</b> Researcher = <span style="color:var(--claude)">Claude Sonnet 5</span>, QC = <span style="color:var(--gpt)">GPT-5.5</span>, Auditor = <span style="color:var(--gemini)">Gemini 3.5 Pro</span>. Different labs = uncorrelated blind spots. All sizing/risk math is <span style="color:var(--rules)">deterministic Python</span> — never an LLM.
+  </div>
+
+  <div class="legend">
+    <span class="chip"><span class="dot" style="background:var(--claude)"></span><b>Claude</b> — synthesis</span>
+    <span class="chip"><span class="dot" style="background:var(--gpt)"></span><b>GPT-5.5</b> — adversarial QC</span>
+    <span class="chip"><span class="dot" style="background:var(--gemini)"></span><b>Gemini</b> — weekly audit</span>
+    <span class="chip"><span class="dot" style="background:var(--rules)"></span><b>Rules</b> — deterministic math</span>
+    <span class="chip"><span class="dot" style="background:var(--human)"></span><b>Human</b> — you approve</span>
+    <span class="chip"><span class="dot" style="background:var(--gate)"></span><b>Gate</b> — can stop the cycle</span>
+    <span class="chip"><span class="dot" style="background:var(--data)"></span><b>Threshold / number</b></span>
+  </div>
+
+  <div class="sectionhdr">Daily prerequisite &nbsp;·&nbsp; 07:30 IST Mon–Fri</div>
+  <div class="col">
+    <div class="card lead" style="--l:var(--human)">
+      <div class="ctitle">🔑 Kite login email<span class="htag t-human">human · 20s</span></div>
+      <p class="cwhat">Resend emails a one-tap Zerodha login link. You log in → <code>/kite_callback</code> captures the <span class="k">access token</span> → saved to SQLite. Token expires midnight IST, so this repeats every trading day.</p>
+      <div class="halt">⚠ Not activated by 09:15 → all of today's research cycles are skipped (no valid Kite session).</div>
+    </div>
+  </div>
+
+  <div class="sectionhdr">Research cycle &nbsp;·&nbsp; 09:15 → 15:15 IST, hourly (7×/day)</div>
+  <div class="col">
+
+    <!-- STEP 0 -->
+    <div class="card lead" style="--l:var(--rules)">
+      <span class="step">STEP 0</span>
+      <div class="ctitle">Portfolio Risk Gate<span class="htag t-rules">rules</span></div>
+      <p class="cwhat">Runs <b>first, before anything else</b>. Deterministic circuit breakers, checked in severity order. Any trip → whole cycle halts + Gmail alert. If the check itself errors → fail-safe, no trade.</p>
+      <div class="grid">
+        <div class="box"><h4>Circuit breakers (halt if…)</h4><ul>
+          <li>Drawdown ≤ <span class="k">−8%</span> below all-time peak</li>
+          <li>Weekly realised P&L ≤ <span class="k">−₹15,000</span></li>
+          <li>Deployed capital ≥ <span class="k">65%</span></li>
+          <li>Open positions ≥ <span class="k">6</span></li>
+          <li>Any sector &gt; <span class="k">30%</span> of capital</li>
+        </ul></div>
+        <div class="box"><h4>How value is tracked</h4><ul>
+          <li>Portfolio = capital + all realised P&L</li>
+          <li>Peak stored in SQLite, bumped on new highs</li>
+          <li>No live-price fetch here — simple &amp; reliable</li>
+          <li>Base capital: <span class="k">₹10,00,000</span></li>
+        </ul></div>
+      </div>
+    </div>
+
+    <div class="arrow lbl"><span class="tag ok">✓ approved</span></div>
+
+    <!-- STEP 1 -->
+    <div class="card lead" style="--l:var(--rules)">
+      <span class="step">STEP 1</span>
+      <div class="ctitle">Regime Classifier<span class="htag t-rules">rules · not an LLM</span></div>
+      <p class="cwhat">Deterministic math on live Kite data → one of 5 regimes. Reproducible &amp; auditable by design.</p>
+      <div class="grid">
+        <div class="box"><h4>3 inputs (weighted composite score)</h4><ul>
+          <li>Nifty 50 vs 200-day EMA <span class="dim">(weight ≈3)</span></li>
+          <li>India VIX level + 5-day trend <span class="dim">(≈2.5)</span></li>
+          <li>Breadth: % of ≤20 tickers above 50-SMA <span class="dim">(≈2)</span></li>
+        </ul></div>
+        <div class="box"><h4>Key thresholds</h4><ul>
+          <li>VIX: calm<span class="k">&lt;15</span> · elevated<span class="k">&lt;20</span> · high<span class="k">&lt;25</span> · extreme<span class="k">≥30</span></li>
+          <li>Nifty bands: euphoria<span class="k">+8%</span> · bull<span class="k">+2%</span> · bear<span class="k">−3%</span> · crash<span class="k">−12%</span></li>
+          <li>Breadth: bull<span class="k">≥65%</span> · weak<span class="k">&lt;40%</span></li>
+        </ul></div>
+        <div class="box full"><h4>5 regimes &amp; overrides</h4><ul>
+          <li>🚀 <b>Euphoria</b> · 🟢 <b>Bull</b> · 🟡 <b>Sideways</b> · 🟠 <b>Bear</b> · 🔴 <b>Crash</b></li>
+          <li><b>Hard override:</b> VIX <span class="k">≥30</span> OR Nifty <span class="k">≤−12%</span> → forced <b>Crash</b> regardless of score</li>
+          <li><b>Inertia:</b> needs <span class="k">2</span> consecutive matching reads to switch regime; mid-transition it holds the prior regime and drops confidence <span class="k">−25</span> (anti-whiplash)</li>
+        </ul></div>
+      </div>
+      <div class="halt">⛔ Gate: regime confidence <span class="stop">&lt; 60%</span> → cycle skipped.</div>
+    </div>
+
+    <div class="arrow lbl"><span class="tag ok">✓ confidence ≥ 60%</span></div>
+
+    <!-- STEP 2 -->
+    <div class="card lead" style="--l:var(--claude)">
+      <span class="step">STEP 2</span>
+      <div class="ctitle">Signal Generator<span class="htag t-claude">python + Claude Sonnet 5</span></div>
+      <p class="cwhat">Regime picks a <b>strategy basket</b>. Python computes all indicators; Claude does pure synthesis (no live API calls — data is passed in as text, keeping every signal auditable).</p>
+      <div class="grid">
+        <div class="box"><h4>Strategy baskets by regime</h4><ul>
+          <li><b>Bull:</b> 52wk_breakout, supertrend_buy</li>
+          <li><b>Sideways:</b> rsi_mean_reversion</li>
+          <li><b>Bear / Crash / Euphoria:</b> <span class="stop">empty → no new longs, cycle ends</span></li>
+        </ul></div>
+        <div class="box"><h4>Indicators (Python)</h4><ul>
+          <li>RSI-14 (Wilder), Supertrend(10,3)</li>
+          <li>Volume ratio 20d, % from 52wk high</li>
+          <li>Bollinger position, SMA-50/200, ATR%</li>
+          <li>+ Google News RSS: macro / sector / company</li>
+        </ul></div>
+        <div class="box full"><h4>Claude's job &amp; scoring rubric</h4><ul>
+          <li>“Reject far more often than you approve.” 75%+ = genuinely exceptional.</li>
+          <li>confidence = <span class="k">0.6 × technical + 0.4 × fundamental</span>; fundamental starts at 60 (neutral), adjusted by news</li>
+          <li>Scans <b>every</b> ticker × strategy → keeps the single <b>highest-confidence</b> signal. Every eval logged to cycle_log.</li>
+        </ul></div>
+      </div>
+      <div class="halt">⛔ Gate: verdict must be <span class="go">TRADE</span> AND confidence <span class="k">≥ 75%</span> — else None, cycle ends. Frequency is an <i>output</i>, never a target.</div>
+    </div>
+
+    <div class="arrow lbl"><span class="tag ok">✓ 1 signal ≥ 75%</span></div>
+
+    <!-- STEP 3 -->
+    <div class="card lead" style="--l:var(--rules)">
+      <span class="step">STEP 3</span>
+      <div class="ctitle">Risk Sizer<span class="htag t-rules">rules · no LLM ever</span></div>
+      <p class="cwhat">The “compliance desk.” 6 checks in severity order — returns on first failure — then confidence-scaled sizing.</p>
+      <div class="grid">
+        <div class="box"><h4>Reject if…</h4><ul>
+          <li>Weekly P&L &lt; <span class="k">−10%</span> of capital</li>
+          <li>Already ≥ <span class="k">5</span> concurrent positions</li>
+          <li>Already holding this ticker (no pyramiding)</li>
+          <li>Sector already ≥ <span class="k">35%</span> of capital</li>
+          <li>Free capital &lt; <span class="k">₹10,000</span></li>
+        </ul></div>
+        <div class="box"><h4>Sizing formula</h4><ul>
+          <li>Base = <span class="k">20%</span> of capital per trade</li>
+          <li>Confidence scale: 70%→<span class="k">0.60×</span>, 100%→<span class="k">1.00×</span></li>
+          <li>Capped at free-capital×0.95 &amp; sector headroom</li>
+          <li>Final &lt; ₹10k after caps → reject</li>
+        </ul></div>
+      </div>
+      <div class="note">Trader fills exact share quantity later at live price — sizer only decides ₹ to deploy.</div>
+    </div>
+
+    <div class="arrow lbl"><span class="tag ok">✓ approved &amp; sized</span></div>
+
+    <!-- STEP 4 -->
+    <div class="card lead" style="--l:var(--gpt)">
+      <span class="step">STEP 4</span>
+      <div class="ctitle">QC / Fact-Checker<span class="htag t-gpt">GPT-5.5 · adversarial</span></div>
+      <p class="cwhat">Independent lab, on purpose. Its <b>only</b> job is to try to <b>falsify</b> the thesis — checks technical claims vs numbers, unverifiable fundamentals, regime mismatch, narrative/recency bias, sector risk. Must log disconfirming evidence even on AGREE.</p>
+      <div class="grid">
+        <div class="box"><h4>Verdicts</h4><ul>
+          <li><span class="go">AGREE</span> → proceed</li>
+          <li><span class="stop">DISAGREE</span> → block</li>
+          <li><span class="stop">NEEDS_MORE_DATA</span> → block</li>
+        </ul></div>
+        <div class="box"><h4>Fail-safe</h4><ul>
+          <li>Missing API key, parse error, API outage → forced <b>NEEDS_MORE_DATA</b></li>
+          <li>i.e. a broken QC blocks the trade — never ships it</li>
+        </ul></div>
+      </div>
+      <div class="halt">⛔ Gate: only <span class="go">AGREE</span> passes.</div>
+    </div>
+
+    <div class="arrow lbl"><span class="tag ok">✓ AGREE</span></div>
+
+    <!-- STEP 5 -->
+    <div class="card lead" style="--l:var(--gate)">
+      <span class="step">STEP 5</span>
+      <div class="ctitle">Log + Alert<span class="htag t-rules">rules</span></div>
+      <p class="cwhat">Write signal to SQLite ledger → send Gmail alert (Resend) with HMAC-signed <b>Approve / Reject</b> links → mirror to Google Sheets (non-blocking; failure never stops the cycle).</p>
+    </div>
+
+  </div><!-- /col -->
+
+  <div class="arrow" style="height:20px"></div>
+
+  <!-- APPROVAL -->
+  <div class="col">
+    <div class="card sidebar">
+      <div class="ctitle">📧 Your decision<span class="htag t-human">human-in-the-loop</span></div>
+      <p class="cwhat">Async — you tap on your phone whenever you see the email. Link is HMAC-verified against <code>APPROVAL_SECRET</code>.</p>
+      <div class="split">
+        <div class="box"><h4 style="color:var(--ok)">Approve</h4>
+          Marks <b>APPROVED</b> → browser redirects to a <b>pre-filled Kite basket order</b>. <b>You</b> tap “Place Order” in your own Kite session. The system <u>never</u> auto-places orders.</div>
+        <div class="box"><h4 style="color:var(--danger)">Reject / no reply</h4>
+          Reject → REJECTED. <b>No response by EOD → NO_TRADE</b> (locked design), logged as a missed opportunity for the Auditor. Auto-fire deferred to month 4+.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow lbl"><span class="tag ok">on approve → place order</span></div>
+
+  <!-- TRADER -->
+  <div class="col">
+    <div class="card lead" style="--l:var(--rules)">
+      <div class="ctitle">⚙️ Trader — pre-trade circuit breakers<span class="htag t-rules">rules</span></div>
+      <p class="cwhat">India-microstructure checks fire before any order (paper or live). Kite Connect API directly; <b>PAPER_MODE</b> just logs the intended order.</p>
+      <div class="grid">
+        <div class="box"><h4>Skip the trade if…</h4><ul>
+          <li>Order &gt; <span class="k">2%</span> of 20d avg daily volume (you'd move price)</li>
+          <li>LTP within <span class="k">1.5%</span> of upper/lower circuit</li>
+          <li>20d avg turnover &lt; <span class="k">₹3 Cr</span> (too illiquid)</li>
+        </ul></div>
+        <div class="box"><h4>Execution</h4><ul>
+          <li>Re-fetches live LTP → computes share qty</li>
+          <li>LIVE = CNC delivery market order</li>
+          <li>Corp-action blackout (<span class="k">3d</span>) — planned/TODO</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MONITOR + AUDIT side by side -->
+  <div class="sectionhdr">Ongoing oversight</div>
+  <div class="split">
+    <div class="card lead" style="--l:var(--rules)">
+      <div class="ctitle">📊 Position Monitor<span class="htag t-rules">daily 15:35</span></div>
+      <p class="cwhat">Every open position, after close. Emails on any action needed.</p>
+      <div class="box"><h4>Status logic</h4><ul>
+        <li><span class="stop">INVALIDATED</span> — stop hit (<span class="k">−7%</span> from entry) <b>or</b> regime flipped against thesis (bull→bear/crash; sideways→crash; euphoria→bear/crash)</li>
+        <li><span class="gate">WEAKENING</span> — P&L ≤ <span class="k">−3%</span>, nearing stop</li>
+        <li><span class="go">INTACT</span> — no action</li>
+      </ul></div>
+    </div>
+    <div class="card lead" style="--l:var(--gemini)">
+      <div class="ctitle">🔎 Weekly Auditor<span class="htag t-gemini">Gemini · Fri 16:00</span></div>
+      <p class="cwhat">Entire week in one 2M-token prompt (catches cross-signal patterns).</p>
+      <div class="box"><h4>3 tasks</h4><ul>
+        <li>Confidence calibration by bucket (60–74 / 75–84 / 85+) vs actual win rate</li>
+        <li>Missed-opportunity review (NO_RESPONSE / REJECTED / SKIPPED)</li>
+        <li>Testable hypotheses → <b>backlog</b></li>
+      </ul></div>
+      <div class="halt" style="color:var(--gemini);background:rgba(66,133,244,.08);border-color:rgba(66,133,244,.25)">🔒 Hypotheses are paper-tested first — the Auditor <b>never</b> edits the live Researcher directly. Calibration flag → Gmail alert.</div>
+    </div>
+  </div>
+
+  <!-- Supporting jobs -->
+  <div class="sectionhdr">Supporting jobs &amp; stores</div>
+  <div class="split">
+    <div class="card lead" style="--l:var(--rules)">
+      <div class="ctitle">🌐 Universe Refresh<span class="htag t-rules">Sun 20:00 · Screener.in</span></div>
+      <p class="cwhat">Fundamental discovery screen across all listed NSE+BSE names.</p>
+      <div class="box"><h4>Screen &amp; buckets</h4><ul>
+        <li>Query: <span class="k">ROCE&gt;20 · D/E&lt;0.5 · Sales growth&gt;15% · Mcap&gt;₹300Cr</span></li>
+        <li>New candidates split: <b>strong</b> ≥₹500Cr vs <b>watch</b> &lt;₹500Cr</li>
+        <li>Flags degraded universe stocks → emailed report (you decide additions)</li>
+      </ul></div>
+    </div>
+    <div class="card lead" style="--l:var(--gate)">
+      <div class="ctitle">🗄️ Ledger + EOD sweep<span class="htag t-rules">SQLite + Sheets</span></div>
+      <p class="cwhat">Single source of truth, mirrored to Google Sheets.</p>
+      <div class="box"><h4>Tables &amp; 15:35 sweep</h4><ul>
+        <li>signals · trades · position_checks · weekly_audits · cycle_log · kite_token · portfolio_peak</li>
+        <li>EOD: mark unanswered signals <b>NO_RESPONSE</b> + send daily summary (fires even on zero-signal days, for visibility)</li>
+      </ul></div>
+    </div>
+  </div>
+
+  <div class="sectionhdr">Locked design decisions</div>
+  <div class="card">
+    <span class="pill">No response = NO TRADE</span>
+    <span class="pill">Trade frequency is an output, not a target</span>
+    <span class="pill">QC falsifies, never rubber-stamps</span>
+    <span class="pill">Auditor findings → paper-test → then live</span>
+    <span class="pill">LLMs never size or move money</span>
+    <span class="pill">System never auto-places orders (you tap Place Order)</span>
+    <span class="pill">PAPER_MODE until validated end-to-end</span>
+  </div>
+
+</div>
+</body>
+</html>

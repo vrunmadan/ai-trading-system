@@ -24,8 +24,17 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-LONG_STOP_LOSS_PCT = float(os.getenv("LONG_STOP_LOSS_PCT", "7.0"))
-WEAKENING_PCT = float(os.getenv("WEAKENING_ALERT_PCT", "3.0"))   # alert before stop
+LONG_STOP_LOSS_PCT = float(os.getenv("LONG_STOP_LOSS_PCT", "7.0"))   # hard disaster stop from entry
+TRAILING_STOP_PCT = float(os.getenv("TRAILING_STOP_PCT", "20.0"))    # trailing stop from peak (backtest-validated)
+WEAKENING_PCT = float(os.getenv("WEAKENING_ALERT_PCT", "3.0"))       # alert before stop
+
+# Exit design (validated by streak_backtests/backtest.py, 10y, 20% trail beat 7%
+# trail and time exits decisively; a profit target REDUCED expectancy so there is
+# none): exit a long when price breaches the HIGHER of
+#   (a) hard stop  = entry_price * (1 - LONG_STOP_LOSS_PCT/100), and
+#   (b) trail stop = peak_price  * (1 - TRAILING_STOP_PCT/100),
+# where peak_price = max(entry, every logged check price, today's price).
+# Early on the hard stop binds; once a trade runs up, the trailing stop takes over.
 
 # Regime combinations that invalidate a long thesis entered in key
 REGIME_INVALIDATION_MAP: dict[str, list[str]] = {
@@ -69,6 +78,25 @@ def _send_monitor_email(text: str) -> None:
         send_plain_email(subject="📊 Daily Position Monitor", body=text)
     except Exception as e:
         log.error(f"Monitor email send failed: {e}")
+
+
+def _peak_price(trade_id: int, entry_price: float, current_price: float) -> float:
+    """Highest price seen over the life of the trade: max(entry, all prior
+    daily checks, today). Used to anchor the trailing stop. No schema change —
+    reuses the price_at_check column already logged each day."""
+    peak = max(entry_price, current_price)
+    try:
+        from ledger.db import get_db
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT MAX(price_at_check) AS hi FROM position_checks WHERE trade_id=?",
+                (trade_id,),
+            ).fetchone()
+        if row and row["hi"] is not None:
+            peak = max(peak, float(row["hi"]))
+    except Exception as e:
+        log.error(f"Could not read peak for trade {trade_id}: {e}")
+    return peak
 
 
 # ---------------------------------------------------------------------------
@@ -137,8 +165,14 @@ def check_open_positions() -> None:
 
         # ----------------------------------------------------------------
         # Step 2: Stop-loss check (longs only for now)
+        # Exit on the HIGHER of the hard stop (from entry) and the trailing
+        # stop (from the peak price seen so far). See config notes at top.
         # ----------------------------------------------------------------
-        stop_price = entry_price * (1 - LONG_STOP_LOSS_PCT / 100)
+        hard_stop = entry_price * (1 - LONG_STOP_LOSS_PCT / 100)
+        peak_price = _peak_price(trade_id, entry_price, current_price)
+        trail_stop = peak_price * (1 - TRAILING_STOP_PCT / 100)
+        stop_price = max(hard_stop, trail_stop)          # effective stop
+        stop_kind = "trailing" if trail_stop >= hard_stop else "hard"
         stop_triggered = direction == "BUY" and current_price <= stop_price
 
         # ----------------------------------------------------------------
@@ -169,8 +203,9 @@ def check_open_positions() -> None:
             reasons = []
             if stop_triggered:
                 reasons.append(
-                    f"Stop triggered: ₹{current_price:.2f} ≤ ₹{stop_price:.2f} "
-                    f"({pnl_pct:+.1f}%)"
+                    f"{stop_kind.capitalize()} stop triggered: ₹{current_price:.2f} ≤ "
+                    f"₹{stop_price:.2f} ({pnl_pct:+.1f}%; peak ₹{peak_price:.2f}, "
+                    f"trail {TRAILING_STOP_PCT:.0f}%)"
                 )
             if regime_invalidated:
                 reasons.append(

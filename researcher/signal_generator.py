@@ -53,52 +53,109 @@ class TradeSignal:
 
 # ---------------------------------------------------------------------------
 # Strategy baskets — one per regime bucket.
-# Empty list = no longs (Bear / Crash / Euphoria).
 # Each strategy has a name + plain-English entry criteria passed to Claude.
-# These are the strategies that passed Streak backtesting. Add new ones only
-# after a Streak backtest in streak_backtests/ shows positive expectancy.
+#
+# EVIDENCE-BASED MAPPING (10y backtest, Nifty100/Midcap150, 20% trailing exit —
+# see streak_backtests/backtest.py --by-regime). Key findings that shaped this:
+#   • Trend/breakout family (52wk_breakout, bb_squeeze_break, adx_bull_strength)
+#     is the BULL/EUPHORIA engine: PF ~2.4–3.4, drawdowns ~-20 to -28%.
+#   • supertrend_buy was REMOVED from BULL: weakest trend strategy there
+#     (PF ~1.5–1.8) with a -48% to -60% drawdown — it whipsaws in strong trends.
+#   • Mean-reversion (rsi/bb/cci) is the WEAK LINK. On the FULL Nifty-500 universe
+#     WITH 50bps costs it posts PF 1.6–2.1 in sideways with -82% to -91% drawdowns
+#     (knife-catching on smaller-caps) — beaten by the breakout family in EVERY
+#     long-tradable regime, including sideways. So it was REMOVED from all baskets.
+#   • SIDEWAYS is breakout-led too: golden_cross_ema (PF 3.74), 52wk_breakout and
+#     bb_squeeze_break all beat mean-reversion with ~1/3 the drawdown. Breakouts
+#     from a consolidation catch the next trend leg.
+#   • BEAR/CRASH stay empty: the backtest's "edge" there was hold-into-recovery
+#     bias, not tradable. Long-only ⇒ capital preservation (cash) is the edge.
+# Net: ONE coherent engine (breakouts + 20% trailing exit); the regime only
+# decides ACTIVE (bull/euphoria/sideways) vs CASH (bear/crash).
+# Add new strategies only after a --by-regime backtest shows PF>1.3 AND positive
+# expectancy in the target regime.
 # ---------------------------------------------------------------------------
+_S_52WK_BREAKOUT = {
+    "name": "52wk_breakout",
+    "description": (
+        "Entry: LTP has just broken above OR is within 1% of the 52-week high. "
+        "Volume today is ≥ 1.5x the 20-day average (breakout confirmation). "
+        "RSI(14) is 50–70 (momentum but not overbought). Supertrend(10,3) is GREEN. "
+        "Thesis: momentum continuation after a proven resistance level is cleared "
+        "with volume. Do NOT fire on a high-RSI stock near its 52-week high if "
+        "volume is below average — that's a grind, not a breakout."
+    ),
+}
+_S_BB_SQUEEZE_BREAK = {
+    "name": "bb_squeeze_break",
+    "description": (
+        "Entry: the stock was in a Bollinger-Band SQUEEZE (bb_squeeze = True: "
+        "bandwidth in the bottom 20% of the last 100 days — a volatility contraction) "
+        "AND price is now breaking ABOVE the upper band (bb_breaking_upper = True) "
+        "with RSI(14) > 50. Thesis: volatility contraction resolving upward into a new "
+        "expansion leg. Do NOT fire if there was no prior squeeze — a band break without "
+        "a preceding squeeze is just chasing."
+    ),
+}
+_S_ADX_BULL_STRENGTH = {
+    "name": "adx_bull_strength",
+    "description": (
+        "Entry: ADX(14) has just crossed ABOVE 25 (trend strength emerging), +DI is above "
+        "-DI (bulls in control), and LTP is above the 50-day SMA. Thesis: a fresh, "
+        "strengthening uptrend. Do NOT fire if ADX is high but FALLING, or if -DI > +DI "
+        "(that's a strengthening DOWNtrend)."
+    ),
+}
+_S_GOLDEN_CROSS = {
+    "name": "golden_cross_ema",
+    "description": (
+        "Entry: the 50-day EMA has just crossed ABOVE the 200-day EMA (a fresh golden "
+        "cross, ema50_above_ema200 = True with golden_cross_recent = True), with LTP above "
+        "both. Thesis: a durable trend-regime change confirming from a base/consolidation — "
+        "the strongest sideways-to-uptrend transition in the backtest. Do NOT fire on a "
+        "long-established cross (that's chasing) or when price is far extended above the EMAs."
+    ),
+}
+_S_RSI_MEAN_REVERSION = {
+    "name": "rsi_mean_reversion",
+    "description": (
+        "Entry: daily RSI(14) < 35 AND Bollinger position < 25% (near lower band). "
+        "Stock is NOT making new 52-week lows (avoid falling knives). "
+        "Thesis: oversold bounce in a range-bound market. Do NOT fire if RSI is "
+        "declining fast (still in freefall) — wait for RSI to turn up before entry."
+    ),
+}
+_S_BB_MEAN_REVERSION = {
+    "name": "bb_mean_reversion",
+    "description": (
+        "Entry: LTP has closed BELOW the lower Bollinger band AND RSI(14) < 40, and the "
+        "stock is NOT making a new 52-week low. Thesis: stretched-to-the-downside snapback "
+        "inside a range. Do NOT fire on a stock in a clean downtrend (below a falling "
+        "50-day SMA with -DI dominant) — that's a knife."
+    ),
+}
+_S_CCI_RECOVERY = {
+    "name": "cci_recovery",
+    "description": (
+        "Entry: CCI(20) has just crossed back ABOVE -100 from below (oversold momentum "
+        "turning up), and the stock is NOT making a new 52-week low. Thesis: mean-reversion "
+        "with a momentum-turn confirmation, for a range-bound market. Do NOT fire while CCI "
+        "is still falling below -100."
+    ),
+}
+
 STRATEGY_BASKETS: dict[Regime, list[dict]] = {
-    Regime.BULL: [
-        {
-            "name": "52wk_breakout",
-            "description": (
-                "Entry: LTP has just broken above OR is within 1% of the 52-week high. "
-                "Volume today is ≥ 1.5x the 20-day average (breakout confirmation). "
-                "RSI(14) is 50–70 (momentum but not overbought). "
-                "Supertrend(10,3) is GREEN. "
-                "Thesis: momentum continuation after a proven resistance level is cleared "
-                "with volume. Do NOT fire on a high-RSI stock near its 52-week high if "
-                "volume is below average — that's a grind, not a breakout."
-            ),
-        },
-        {
-            "name": "supertrend_buy",
-            "description": (
-                "Entry: Supertrend(10,3) has JUST flipped from RED to GREEN on the daily chart "
-                "(flag if the flip happened within the last 2 bars). "
-                "LTP is above the 50-day SMA. RSI(14) is 40–65. "
-                "Thesis: trend-following entry on a confirmed momentum shift. "
-                "Do NOT fire if the flip happened > 5 bars ago — you'd be chasing."
-            ),
-        },
-    ],
-    Regime.SIDEWAYS: [
-        {
-            "name": "rsi_mean_reversion",
-            "description": (
-                "Entry: daily RSI(14) < 35 AND Bollinger position < 25% (near lower band). "
-                "Volume declining over the past 3 days (selling exhaustion). "
-                "Stock is NOT making new 52-week lows (avoid falling knives). "
-                "Thesis: oversold bounce in a range-bound market. "
-                "Do NOT fire if RSI is declining fast (still in freefall) — wait for "
-                "RSI to turn up before entry."
-            ),
-        },
-    ],
-    Regime.BEAR: [],      # No new longs in a bear market
-    Regime.CRASH: [],     # Capital preservation — no longs
-    Regime.EUPHORIA: [],  # No new entries — tighten stops on existing only
+    # Trend/breakout engine. supertrend_buy intentionally excluded (see notes above).
+    Regime.BULL: [_S_52WK_BREAKOUT, _S_BB_SQUEEZE_BREAK, _S_ADX_BULL_STRENGTH],
+    # Late-cycle: same breakouts still print (PF 2.7–4.0) but froth risk is high —
+    # the Risk Sizer should size these smaller. Revises the earlier "no euphoria
+    # entries" stance based on backtest evidence.
+    Regime.EUPHORIA: [_S_ADX_BULL_STRENGTH, _S_BB_SQUEEZE_BREAK, _S_52WK_BREAKOUT],
+    # Range: breakout-led (consolidation breakouts catch the next trend leg).
+    # Mean-reversion removed — worse PF and 2–3x the drawdown on the full universe.
+    Regime.SIDEWAYS: [_S_52WK_BREAKOUT, _S_BB_SQUEEZE_BREAK, _S_GOLDEN_CROSS],
+    Regime.BEAR: [],      # No new longs — capital preservation (cash).
+    Regime.CRASH: [],     # No new longs — capital preservation (cash).
 }
 
 
@@ -215,6 +272,95 @@ def _bollinger_position(closes: list[float], period: int = 20, mult: float = 2.0
     return round((closes[-1] - lower) / (upper - lower) * 100, 1)
 
 
+def _ema_series(closes: list[float], period: int) -> list[float]:
+    """Full EMA series aligned to closes."""
+    if not closes:
+        return []
+    k = 2.0 / (period + 1)
+    out = [closes[0]]
+    ema = closes[0]
+    for c in closes[1:]:
+        ema = c * k + ema * (1 - k)
+        out.append(ema)
+    return out
+
+
+def _golden_cross(closes: list[float]) -> tuple[bool, bool]:
+    """Returns (ema50_above_ema200, just_crossed_up_within_2_bars)."""
+    if len(closes) < 205:
+        return False, False
+    e50 = _ema_series(closes, 50)
+    e200 = _ema_series(closes, 200)
+    above = e50[-1] > e200[-1]
+    crossed = any(e50[-1 - k] > e200[-1 - k] and e50[-2 - k] <= e200[-2 - k] for k in range(2))
+    return above, crossed
+
+
+def _adx(highs: list[float], lows: list[float], closes: list[float],
+         period: int = 14) -> tuple[float, float, float]:
+    """Returns (ADX, +DI, -DI) — Wilder. All 0.0 if insufficient history."""
+    n = len(closes)
+    if n < 2 * period + 2:
+        return 0.0, 0.0, 0.0
+    tr = [0.0] * n; pdm = [0.0] * n; mdm = [0.0] * n
+    for i in range(1, n):
+        up = highs[i] - highs[i - 1]; dn = lows[i - 1] - lows[i]
+        pdm[i] = up if (up > dn and up > 0) else 0.0
+        mdm[i] = dn if (dn > up and dn > 0) else 0.0
+        tr[i] = max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]), abs(lows[i] - closes[i - 1]))
+    atr = sum(tr[1:period + 1]); sp = sum(pdm[1:period + 1]); sm = sum(mdm[1:period + 1])
+    pdi = mdi = 0.0; dxs = []
+    for i in range(period + 1, n):
+        atr = atr - atr / period + tr[i]
+        sp = sp - sp / period + pdm[i]
+        sm = sm - sm / period + mdm[i]
+        pdi = 100 * sp / atr if atr else 0.0
+        mdi = 100 * sm / atr if atr else 0.0
+        denom = pdi + mdi
+        dxs.append(100 * abs(pdi - mdi) / denom if denom else 0.0)
+    if len(dxs) < period:
+        return 0.0, round(pdi, 1), round(mdi, 1)
+    adx = sum(dxs[:period]) / period
+    for dx in dxs[period:]:
+        adx = (adx * (period - 1) + dx) / period
+    return round(adx, 1), round(pdi, 1), round(mdi, 1)
+
+
+def _cci(highs: list[float], lows: list[float], closes: list[float], period: int = 20) -> float:
+    """Commodity Channel Index (current value)."""
+    if len(closes) < period:
+        return 0.0
+    tp = [(highs[i] + lows[i] + closes[i]) / 3 for i in range(len(closes))]
+    window = tp[-period:]
+    sma = sum(window) / period
+    md = sum(abs(x - sma) for x in window) / period
+    return round((tp[-1] - sma) / (0.015 * md), 1) if md else 0.0
+
+
+def _bb_bandwidth_squeeze(closes: list[float], period: int = 20, mult: float = 2.0,
+                          lookback: int = 100) -> tuple[float, bool, bool]:
+    """Returns (bandwidth_pct, is_squeeze, breaking_above_upper).
+    is_squeeze: current bandwidth in the bottom 20% of the last `lookback` bars.
+    breaking_above_upper: close just crossed above the upper band this bar."""
+    n = len(closes)
+    if n < period + 2:
+        return 0.0, False, False
+
+    def band(i):
+        w = closes[i - period + 1:i + 1]
+        m = sum(w) / period
+        std = (sum((x - m) ** 2 for x in w) / period) ** 0.5
+        return m + mult * std, m - mult * std, ((2 * mult * std) / m * 100 if m else 0.0)
+
+    up_now, _, bw_now = band(n - 1)
+    up_prev, _, _ = band(n - 2)
+    breaking = closes[-1] > up_now and closes[-2] <= up_prev
+    hist_bw = [band(i)[2] for i in range(max(period - 1, n - lookback), n)]
+    thresh = sorted(hist_bw)[int(0.20 * len(hist_bw))] if hist_bw else 0.0
+    is_squeeze = bw_now <= thresh and bw_now > 0
+    return round(bw_now, 2), is_squeeze, breaking
+
+
 def _compute_indicators(hist: list[dict], ticker: str) -> dict:
     """Compute all technical indicators from Kite historical_data bars."""
     closes = [c["close"] for c in hist]
@@ -226,6 +372,9 @@ def _compute_indicators(hist: list[dict], ticker: str) -> dict:
     st_dir, st_flipped = _supertrend(highs, lows, closes)
     n50 = min(50, len(closes))
     n200 = min(200, len(closes))
+    adx, plus_di, minus_di = _adx(highs, lows, closes)
+    ema50_above_200, golden_cross = _golden_cross(closes)
+    bb_bw, bb_squeeze, bb_breakout = _bb_bandwidth_squeeze(closes)
 
     return {
         "ticker": ticker,
@@ -241,7 +390,60 @@ def _compute_indicators(hist: list[dict], ticker: str) -> dict:
         "above_sma50": ltp > sum(closes[-n50:]) / n50,
         "above_sma200": ltp > sum(closes[-n200:]) / n200,
         "atr_pct": round((max(highs[-14:]) - min(lows[-14:])) / ltp / 14 * 100, 2),
+        # --- indicators added for the evidence-based strategy baskets ---
+        "adx_14": adx,
+        "plus_di": plus_di,
+        "minus_di": minus_di,
+        "cci_20": _cci(highs, lows, closes),
+        "ema50_above_ema200": ema50_above_200,
+        "golden_cross_recent": golden_cross,
+        "bb_bandwidth_pct": bb_bw,
+        "bb_squeeze": bb_squeeze,
+        "bb_breaking_upper": bb_breakout,
     }
+
+
+# ---------------------------------------------------------------------------
+# Deterministic pre-filter — the cheap gate that runs BEFORE any Claude call
+# (and before the per-ticker news fetch). Only tickers that pass a strategy's
+# hard technical rules are sent to Claude. This is what makes a 500-name
+# universe affordable: it collapses ~1,500 Claude calls/cycle to a few dozen.
+#
+# Mirrors the entry rules validated in streak_backtests/backtest.py, but is
+# intentionally PERMISSIVE — it rejects only obvious non-candidates and leaves
+# the fine judgment (freshness of a cross, "not a falling knife", news) to
+# Claude. Any strategy without an explicit rule FAILS OPEN (returns True), so a
+# new basket entry is never silently dropped.
+# ---------------------------------------------------------------------------
+
+def _passes_prefilter(strategy_name: str, ind: dict) -> bool:
+    rsi = ind.get("rsi_14", 50.0)
+    st = ind.get("supertrend_10_3", "UNKNOWN")
+    vol = ind.get("volume_ratio_20d", 0.0)
+    from_high = ind.get("pct_from_52wk_high", -100.0)
+    bb_pos = ind.get("bollinger_position", 50.0)
+    adx = ind.get("adx_14", 0.0)
+    pdi = ind.get("plus_di", 0.0)
+    mdi = ind.get("minus_di", 0.0)
+    cci = ind.get("cci_20", 0.0)
+    above_sma50 = ind.get("above_sma50", False)
+
+    if strategy_name == "52wk_breakout":
+        return from_high >= -1.5 and vol >= 1.5 and 50 <= rsi <= 70 and st == "GREEN"
+    if strategy_name == "bb_squeeze_break":
+        return bool(ind.get("bb_squeeze")) and bool(ind.get("bb_breaking_upper")) and rsi > 50
+    if strategy_name == "adx_bull_strength":
+        return adx > 25 and pdi > mdi and above_sma50
+    if strategy_name == "golden_cross_ema":
+        return bool(ind.get("ema50_above_ema200")) and bool(ind.get("golden_cross_recent"))
+    if strategy_name == "cci_recovery":
+        # recovering out of oversold: back above -100 but still in the low zone
+        return -100 < cci < -20
+    if strategy_name == "bb_mean_reversion":
+        return bb_pos < 20 and rsi < 40
+    if strategy_name == "rsi_mean_reversion":
+        return rsi < 35 and bb_pos < 25
+    return True  # fail-open: unknown strategy still reaches Claude
 
 
 # ---------------------------------------------------------------------------
@@ -395,6 +597,13 @@ def _call_claude(
     bb_note = " ← NEAR LOWER BAND" if ind["bollinger_position"] < 25 else (" ← NEAR UPPER BAND" if ind["bollinger_position"] > 75 else "")
     rsi_note = " ← OVERSOLD" if ind["rsi_14"] < 35 else (" ← OVERBOUGHT" if ind["rsi_14"] > 70 else "")
     wkh_note = " ← BREAKOUT ZONE" if ind["pct_from_52wk_high"] >= -1.5 else (" ← FAR FROM HIGH" if ind["pct_from_52wk_high"] < -20 else "")
+    adx_note = " ← STRONG TREND" if ind.get("adx_14", 0) > 25 else (" ← NO TREND" if ind.get("adx_14", 0) < 20 else "")
+    di_note = "+DI>-DI (bullish)" if ind.get("plus_di", 0) > ind.get("minus_di", 0) else "-DI>+DI (bearish)"
+    cci_note = " ← OVERSOLD (<-100)" if ind.get("cci_20", 0) < -100 else (" ← OVERBOUGHT (>100)" if ind.get("cci_20", 0) > 100 else "")
+    sq_note = "SQUEEZE (low-vol coil)" if ind.get("bb_squeeze") else "no squeeze"
+    brk_note = " + BREAKING ABOVE UPPER BAND" if ind.get("bb_breaking_upper") else ""
+    gc_note = ("EMA50>EMA200" if ind.get("ema50_above_ema200") else "EMA50<EMA200") + \
+              (" ← GOLDEN CROSS just formed" if ind.get("golden_cross_recent") else "")
 
     qual_block = (
         f"\nQUALITATIVE CONTEXT (RSS headlines, unverified — use to flag risk, "
@@ -418,6 +627,10 @@ Pre-computed technical indicators (from Kite Connect daily OHLCV):
   vs 50-day SMA:         {above_50} (SMA ₹{ind["sma_50"]:,.2f})
   vs 200-day SMA:        {above_200} (SMA ₹{ind["sma_200"]:,.2f})
   ATR(14) as % of price: {ind["atr_pct"]:.2f}%
+  ADX(14):               {ind.get("adx_14", 0)}{adx_note}  |  {di_note}
+  CCI(20):               {ind.get("cci_20", 0)}{cci_note}
+  EMA 50/200:            {gc_note}
+  Bollinger bands:       {sq_note} (bandwidth {ind.get("bb_bandwidth_pct", 0)}%){brk_note}
 {qual_block}
 Does this stock meet the entry criteria for the "{strategy["name"]}" strategy?
 Apply the qualitative weighing rules from your system prompt when scoring fundamental_score.
@@ -569,15 +782,35 @@ def generate_signal(regime_reading: RegimeReading) -> Optional[TradeSignal]:
                 )
             continue
 
-        # Fetch qualitative context once per ticker (shared across strategies)
+        # ---- Deterministic pre-filter: gate BEFORE the news fetch + Claude ----
+        # Only strategies whose hard technical rules are met on this ticker are
+        # sent onward. If none pass, skip the ticker entirely (no news, no LLM).
+        passing = [s for s in baskets if _passes_prefilter(s["name"], indicators)]
+        if not passing:
+            for strategy in baskets:
+                log_cycle_evaluation(
+                    cycle_at=cycle_at, regime=regime.value,
+                    regime_confidence=regime_reading.confidence,
+                    ticker=ticker, exchange=resolved_exchange,
+                    strategy=strategy["name"], verdict="PREFILTER_SKIP",
+                    indicators=indicators,
+                )
+            continue
+
+        # Fetch qualitative context once per ticker — only for pre-filtered
+        # candidates (shared across the strategies that passed).
         qual_context = _fetch_qualitative_context(
             ticker=ticker,
             sector=sector_map.get(ticker, "Unknown"),
         )
-        log.debug(f"{ticker}: qualitative context fetched ({len(qual_context)} chars)")
+        log.info(
+            f"{ticker}: {len(passing)}/{len(baskets)} strateg"
+            f"{'y' if len(passing) == 1 else 'ies'} passed pre-filter "
+            f"({', '.join(s['name'] for s in passing)}) — news fetched, calling Claude"
+        )
 
-        # Evaluate each strategy in the basket
-        for strategy in baskets:
+        # Evaluate each strategy that cleared the pre-filter
+        for strategy in passing:
             log.debug(f"Evaluating {ticker} ({resolved_exchange}) / {strategy['name']}")
             verdict = _call_claude(regime, strategy, indicators, qual_context=qual_context)
             if not verdict:
