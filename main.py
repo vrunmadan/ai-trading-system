@@ -143,6 +143,43 @@ def run_cycle() -> None:
         return
 
     # ----------------------------------------------------------------
+    # Step 3b: Convert the approved rupee amount into a share quantity
+    #
+    # The Risk Sizer works in rupees; a Kite order needs shares. Without
+    # this step sizing.quantity stays 0, log_signal persists that 0, and
+    # the approval path reads it back as a 1-share order.
+    # Fail-closed: no price, no signal.
+    # ----------------------------------------------------------------
+    try:
+        from trader.kite_client import get_ltp
+
+        ltp = get_ltp(signal.ticker, getattr(signal, "exchange", "NSE"))
+    except Exception as e:
+        log.error(
+            f"Could not fetch LTP for {signal.ticker} — cannot size the order: {e}",
+            exc_info=True,
+        )
+        return
+
+    if not ltp or ltp <= 0:
+        log.error(f"Invalid LTP ({ltp!r}) for {signal.ticker} — cannot size the order.")
+        return
+
+    sizing.quantity = int(sizing.capital_to_deploy // ltp)
+    if sizing.quantity < 1:
+        log.info(
+            f"{signal.ticker}: approved capital \u20b9{sizing.capital_to_deploy:,.0f} "
+            f"buys less than one share at \u20b9{ltp:,.2f} — skipping."
+        )
+        return
+
+    log.info(
+        f"Order size: {sizing.quantity} x {signal.ticker} @ \u20b9{ltp:,.2f} "
+        f"= \u20b9{sizing.quantity * ltp:,.0f} "
+        f"(sizer approved \u20b9{sizing.capital_to_deploy:,.0f})"
+    )
+
+    # ----------------------------------------------------------------
     # Step 4: QC / Fact-Checker
     # ----------------------------------------------------------------
     try:

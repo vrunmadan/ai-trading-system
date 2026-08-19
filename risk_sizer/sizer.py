@@ -28,8 +28,8 @@ class OpenPosition:
 @dataclass
 class SizingDecision:
     approved: bool
-    capital_to_deploy: float  # INR — Trader converts to shares using live price at execution
-    quantity: int             # 0 until Trader fills this in at live price
+    capital_to_deploy: float  # INR — run_cycle Step 3b converts this to shares at live LTP
+    quantity: int             # 0 from the sizer; run_cycle Step 3b fills it at live LTP
     notes: str
 
 
@@ -149,7 +149,7 @@ def size_position(
     return SizingDecision(
         approved=True,
         capital_to_deploy=capital_to_deploy,
-        quantity=0,  # Trader fills this at execution using live LTP
+        quantity=0,  # placeholder: run_cycle Step 3b sets this from the live LTP
         notes=(
             f"Approved ₹{capital_to_deploy:,.0f} "
             f"({capital_to_deploy / capital * 100:.1f}% of capital). "

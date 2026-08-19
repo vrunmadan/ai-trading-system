@@ -322,8 +322,25 @@ def handle_email_action(action: str, signal_id: int):
         exchange = row["exchange"] if row["exchange"] else "NSE"
         direction = row["direction"]
 
-        # Prefer the Risk Sizer's pre-computed quantity; fall back to capital/notional estimate
-        quantity = row["sized_quantity"] or 1
+        # The quantity is computed in run_cycle Step 3b from the live LTP and
+        # persisted with the signal. There is deliberately no fallback: a
+        # missing or zero quantity means the sizing chain did not complete,
+        # and silently substituting a number would send a wrong-sized order.
+        quantity = row["sized_quantity"]
+        if not quantity or int(quantity) < 1:
+            log.error(
+                f"Signal {signal_id} has no usable quantity "
+                f"(sized_quantity={quantity!r}) — refusing to build a Kite basket."
+            )
+            return (
+                "This signal has no valid order quantity, so no Kite basket was "
+                "opened. The signal was left untouched. This means the sizing step "
+                "did not complete when the alert was generated — check the cycle "
+                "logs for that signal.",
+                False,
+                None,
+            )
+        quantity = int(quantity)
 
         # Mark as APPROVED in the ledger immediately — user has confirmed intent.
         # Actual execution is in Kite's hands from here. Position monitor will
