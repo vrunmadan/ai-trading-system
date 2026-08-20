@@ -35,7 +35,15 @@ CREATE TABLE IF NOT EXISTS trades (
     exit_price REAL,
     exit_time TEXT,
     pnl REAL,
-    mode TEXT NOT NULL DEFAULT 'PAPER'  -- PAPER / LIVE
+    mode TEXT NOT NULL DEFAULT 'PAPER',  -- PAPER / LIVE
+    exchange TEXT NOT NULL DEFAULT 'NSE',  -- NSE / BSE, needed to price the position
+    -- Fill lifecycle. A row is PENDING from the moment the user approves until
+    -- the EOD reconciler checks Kite for it:
+    --   PENDING       intent recorded, fill not yet verified
+    --   CONFIRMED     found in kite.positions()/holdings(); entry_price is the real average
+    --   NOT_EXECUTED  not found at reconciliation; stops counting toward exposure
+    fill_status TEXT NOT NULL DEFAULT 'CONFIRMED',
+    fill_note TEXT
 );
 
 CREATE TABLE IF NOT EXISTS position_checks (

@@ -11,7 +11,8 @@ Pipeline (per research cycle, hourly during market hours):
 Running modes:
   python main.py           → run one research cycle now
   python main.py cycle     → same
-  python main.py monitor   → run position monitor now
+  python main.py monitor   → reconcile fills, then run position monitor now
+  python main.py reconcile → reconcile approved trades against Kite only
   python main.py audit     → run weekly audit now
   python main.py eod       → run EOD missed-opportunity sweep now
 """
@@ -228,6 +229,22 @@ def run_cycle() -> None:
 # Scheduled job wrappers (called by webhook_server.py's _start_scheduler())
 # ---------------------------------------------------------------------------
 
+def run_trade_reconciliation() -> None:
+    """
+    15:35 IST — verify every approved-but-unconfirmed trade against Kite.
+
+    Runs BEFORE the position monitor so stop-losses are evaluated against
+    confirmed fills rather than assumed ones.
+    """
+    from monitor.trade_reconciler import reconcile_pending_trades
+
+    log.info("Running trade reconciliation...")
+    try:
+        reconcile_pending_trades()
+    except Exception as e:
+        log.error(f"Trade reconciliation failed: {e}", exc_info=True)
+
+
 def run_eod_sweep() -> None:
     """15:35 IST — mark unanswered signals as NO_RESPONSE + send daily summary."""
     from alerts.gmail_alert import send_eod_missed_opportunities, send_daily_cycle_summary
@@ -281,12 +298,15 @@ if __name__ == "__main__":
     if cmd in ("cycle", ""):
         run_cycle()
     elif cmd == "monitor":
+        run_trade_reconciliation()
         run_position_monitor()
+    elif cmd == "reconcile":
+        run_trade_reconciliation()
     elif cmd == "audit":
         run_weekly_audit()
     elif cmd == "eod":
         run_eod_sweep()
     else:
         print(f"Unknown command: {cmd}")
-        print("Usage: python main.py [cycle|monitor|audit|eod]")
+        print("Usage: python main.py [cycle|monitor|reconcile|audit|eod]")
         sys.exit(1)

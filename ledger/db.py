@@ -27,12 +27,45 @@ def init_db():
         # Idempotent migrations for existing Railway deployments
         for migration in [
             "ALTER TABLE signals ADD COLUMN exchange TEXT NOT NULL DEFAULT 'NSE'",
+            "ALTER TABLE trades ADD COLUMN exchange TEXT NOT NULL DEFAULT 'NSE'",
+            # Existing rows predate the reconciler and were only ever written by
+            # execute_trade, which places the order itself — so they are already
+            # confirmed. New PENDING rows are written explicitly by the approve path.
+            "ALTER TABLE trades ADD COLUMN fill_status TEXT NOT NULL DEFAULT 'CONFIRMED'",
+            "ALTER TABLE trades ADD COLUMN fill_note TEXT",
         ]:
             try:
                 conn.execute(migration)
                 conn.commit()
             except sqlite3.OperationalError:
                 pass  # Column already exists — normal on fresh init
+
+        # One-time status backfill (safe to re-run; both statements are no-ops
+        # once applied). See the signals.status vocabulary note below.
+        #
+        # 1. Rows marked EXECUTED by the old approve path asserted a fill that
+        #    was never checked. Any of them without a CONFIRMED trade row are
+        #    demoted to APPROVED, which is what actually happened.
+        # 2. MISSED collapsed REJECTED and NO_RESPONSE into one unread value.
+        #    user_response kept the truth, so it can be recovered exactly.
+        try:
+            conn.execute(
+                """
+                UPDATE signals SET status='APPROVED'
+                WHERE status='EXECUTED'
+                  AND id NOT IN (
+                      SELECT signal_id FROM trades
+                      WHERE signal_id IS NOT NULL AND fill_status='CONFIRMED'
+                  )
+                """
+            )
+            conn.execute(
+                "UPDATE signals SET status=user_response "
+                "WHERE status='MISSED' AND user_response IN ('REJECTED','NO_RESPONSE')"
+            )
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # Fresh DB where one of the tables is not built yet.
     print(f"Ledger initialized at {DB_PATH}")
 
 
@@ -103,13 +136,57 @@ def update_signal_alert_sent(signal_id: int):
         )
 
 
+# signals.status vocabulary. Each value means exactly one thing:
+#
+#   PENDING       alert sent, awaiting your response
+#   APPROVED      you approved it; the fill has NOT been verified yet
+#   EXECUTED      a fill was confirmed against Kite — the ONLY state that
+#                 asserts the trade actually happened
+#   NOT_EXECUTED  approved, but the order never reached the market
+#   REJECTED      you rejected it
+#   NO_RESPONSE   the EOD sweep found it unanswered
+#   SKIPPED       dropped before the alert (see skip_signal)
+#
+# Approving used to write EXECUTED directly, which asserted a fill nobody had
+# checked for, and REJECTED/NO_RESPONSE both collapsed into MISSED — a value
+# nothing ever read, while the weekly Auditor searched status for the very
+# names that were being discarded.
+_RESPONSE_TO_STATUS = {
+    "APPROVED": "APPROVED",
+    "REJECTED": "REJECTED",
+    "NO_RESPONSE": "NO_RESPONSE",
+}
+
+
 def update_signal_response(signal_id: int, response: str):
-    """response: 'APPROVED' | 'REJECTED' | 'NO_RESPONSE'"""
-    status = "EXECUTED" if response == "APPROVED" else "MISSED"
+    """
+    Record your answer to an alert.
+
+    APPROVED means intent, not execution. Only the reconciler may promote a
+    signal to EXECUTED, and only after finding the fill (see
+    mark_signal_executed / mark_signal_not_executed).
+    """
+    status = _RESPONSE_TO_STATUS.get(response, response)
     with get_db() as conn:
         conn.execute(
             "UPDATE signals SET user_response=?, status=? WHERE id=?",
             (response, status, signal_id),
+        )
+
+
+def mark_signal_executed(signal_id: int) -> None:
+    """A fill was confirmed. This is the only place EXECUTED is written."""
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE signals SET status='EXECUTED' WHERE id=?", (signal_id,)
+        )
+
+
+def mark_signal_not_executed(signal_id: int) -> None:
+    """Approved, but the order never reached the market."""
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE signals SET status='NOT_EXECUTED' WHERE id=?", (signal_id,)
         )
 
 
@@ -126,17 +203,100 @@ def skip_signal(signal_id: int, reason: str):
 # ---------------------------------------------------------------------------
 
 def log_trade(signal_id: int, ticker: str, direction: str,
-              quantity: int, entry_price: float, mode: str = "PAPER") -> int:
+              quantity: int, entry_price: float, mode: str = "PAPER",
+              exchange: str = "NSE", fill_status: str = "CONFIRMED",
+              fill_note: str | None = None) -> int:
+    """
+    Insert a trade row.
+
+    fill_status defaults to CONFIRMED because the only historical caller
+    (trader.kite_client.execute_trade) places the order itself and therefore
+    knows the fill happened. The approve path uses log_pending_trade instead.
+    """
     with get_db() as conn:
         cur = conn.execute(
             """
             INSERT INTO trades (signal_id, ticker, direction, quantity,
-                                entry_price, entry_time, mode)
-            VALUES (?,?,?,?,?,?,?)
+                                entry_price, entry_time, mode, exchange,
+                                fill_status, fill_note)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
             """,
-            (signal_id, ticker, direction, quantity, entry_price, now_ist(), mode),
+            (signal_id, ticker, direction, quantity, entry_price, now_ist(),
+             mode, exchange, fill_status, fill_note),
         )
         return cur.lastrowid
+
+
+def log_pending_trade(signal_id: int, ticker: str, exchange: str, direction: str,
+                      quantity: int, expected_price: float,
+                      mode: str = "PAPER") -> int:
+    """
+    Record the user's approved intent, before any fill is known.
+
+    entry_price holds the *expected* price (approved capital / quantity). The
+    reconciler replaces it with the real average price from Kite when it
+    confirms the fill. Writing this row at approve time is what makes same-day
+    exposure visible to the portfolio gate and the Risk Sizer — without it,
+    several signals approved in one batch cannot see each other.
+    """
+    return log_trade(
+        signal_id=signal_id, ticker=ticker, direction=direction,
+        quantity=quantity, entry_price=expected_price, mode=mode,
+        exchange=exchange, fill_status="PENDING",
+        fill_note="Awaiting EOD reconciliation against Kite.",
+    )
+
+
+def get_trade_for_signal(signal_id: int) -> dict | None:
+    """Returns the existing trade row for a signal, if any (double-approve guard)."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM trades WHERE signal_id=? ORDER BY id LIMIT 1",
+            (signal_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_pending_trades() -> list[dict]:
+    """Open trades whose fill has not yet been verified against Kite."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM trades WHERE fill_status='PENDING' AND exit_price IS NULL"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def confirm_trade(trade_id: int, fill_price: float, quantity: int | None = None,
+                  note: str | None = None) -> None:
+    """
+    Promote a PENDING trade to CONFIRMED using the real fill from Kite.
+    Overwrites entry_price (and quantity, on a partial fill) with the truth.
+    """
+    with get_db() as conn:
+        if quantity is None:
+            conn.execute(
+                "UPDATE trades SET fill_status='CONFIRMED', entry_price=?, fill_note=? "
+                "WHERE id=?",
+                (fill_price, note, trade_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE trades SET fill_status='CONFIRMED', entry_price=?, quantity=?, "
+                "fill_note=? WHERE id=?",
+                (fill_price, quantity, note, trade_id),
+            )
+
+
+def mark_trade_not_executed(trade_id: int, reason: str) -> None:
+    """
+    The approved order never reached the market. The row is kept for the audit
+    trail but stops counting toward exposure (see get_open_positions).
+    """
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE trades SET fill_status='NOT_EXECUTED', fill_note=? WHERE id=?",
+            (reason, trade_id),
+        )
 
 
 def close_trade(trade_id: int, exit_price: float):
@@ -160,10 +320,20 @@ def close_trade(trade_id: int, exit_price: float):
 # ---------------------------------------------------------------------------
 
 def get_open_positions() -> list[dict]:
-    """Returns trades that have an entry but no exit yet."""
+    """
+    Trades that have an entry and no exit yet, excluding orders the reconciler
+    established were never placed.
+
+    PENDING rows ARE included on purpose: an approved-but-unreconciled order is
+    real exposure as far as the portfolio gate and the Risk Sizer are concerned,
+    and treating it as such is what stops a batch of same-day approvals from
+    each sizing as though the others did not exist.
+    """
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT * FROM trades WHERE entry_price IS NOT NULL AND exit_price IS NULL"
+            "SELECT * FROM trades "
+            "WHERE entry_price IS NOT NULL AND exit_price IS NULL "
+            "  AND fill_status != 'NOT_EXECUTED'"
         ).fetchall()
         return [dict(r) for r in rows]
 

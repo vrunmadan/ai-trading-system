@@ -292,6 +292,11 @@ def _build_kite_basket_url(ticker: str, exchange: str, direction: str, quantity:
     return f"https://kite.zerodha.com/connect/basket?api_key={api_key}&data={encoded}"
 
 
+def _current_mode() -> str:
+    """PAPER or LIVE, read at call time so a config change does not need a restart."""
+    return "PAPER" if os.getenv("PAPER_MODE", "true").lower() == "true" else "LIVE"
+
+
 def handle_email_action(action: str, signal_id: int):
     """
     Called by webhook_server.py when the user taps Approve or Reject.
@@ -304,7 +309,12 @@ def handle_email_action(action: str, signal_id: int):
 
     For 'reject': kite_basket_url is None — just show a confirmation HTML page.
     """
-    from ledger.db import update_signal_response, get_db
+    from ledger.db import (
+        get_db,
+        get_trade_for_signal,
+        log_pending_trade,
+        update_signal_response,
+    )
 
     if action == "approve":
         with get_db() as conn:
@@ -342,11 +352,60 @@ def handle_email_action(action: str, signal_id: int):
             )
         quantity = int(quantity)
 
-        # Mark as APPROVED in the ledger immediately — user has confirmed intent.
-        # Actual execution is in Kite's hands from here. Position monitor will
-        # reconcile if the trade doesn't go through.
+        # Double-approve guard: a link is valid indefinitely, so a second tap
+        # would otherwise write a second trade row and double the recorded
+        # exposure for a single order.
+        existing = get_trade_for_signal(signal_id)
+        if existing and existing.get("fill_status") != "NOT_EXECUTED":
+            log.info(
+                f"Signal #{signal_id} already has trade #{existing['id']} "
+                f"({existing.get('fill_status')}) — re-opening basket without "
+                f"writing a second row."
+            )
+            basket_url = _build_kite_basket_url(ticker, exchange, direction, quantity)
+            return (
+                f"This signal was already approved (trade #{existing['id']}, "
+                f"{existing.get('fill_status')}). Re-opening the same Kite basket; "
+                f"no second position was recorded.",
+                True,
+                basket_url,
+            )
+
+        # Record the approved intent BEFORE touching the signal, so a ledger
+        # failure leaves both untouched rather than marking a signal APPROVED
+        # with no matching position. entry_price is the expected price; the EOD
+        # reconciler replaces it with the real average from Kite.
+        expected_price = float(row["capital_to_deploy"] or 0.0) / quantity
+        try:
+            trade_id = log_pending_trade(
+                signal_id=signal_id,
+                ticker=ticker,
+                exchange=exchange,
+                direction=direction,
+                quantity=quantity,
+                expected_price=expected_price,
+                mode=_current_mode(),
+            )
+        except Exception as e:
+            log.error(
+                f"Could not write PENDING trade for signal {signal_id}: {e}",
+                exc_info=True,
+            )
+            return (
+                "Could not record this trade in the ledger, so no Kite basket was "
+                "opened and the signal was left untouched. Approving without a "
+                "ledger row would leave the risk gates blind to this position.",
+                False,
+                None,
+            )
+
+        # Intent is recorded; now mark the signal and hand off to Kite.
         update_signal_response(signal_id, "APPROVED")
-        log.info(f"Signal #{signal_id} approved — launching Kite basket for {direction} {quantity}×{exchange}:{ticker}")
+        log.info(
+            f"Signal #{signal_id} approved — trade #{trade_id} recorded PENDING "
+            f"({direction} {quantity}×{exchange}:{ticker} @ ~₹{expected_price:,.2f}); "
+            f"launching Kite basket."
+        )
 
         basket_url = _build_kite_basket_url(ticker, exchange, direction, quantity)
 
@@ -360,7 +419,8 @@ def handle_email_action(action: str, signal_id: int):
         )
 
         return (
-            f"Kite basket launched: {direction} {quantity} × {exchange}:{ticker}. "
+            f"Kite basket launched: {direction} {quantity} × {exchange}:{ticker} "
+            f"(trade #{trade_id}, pending fill confirmation). "
             "Tap Place Order in Kite to execute.",
             True,
             basket_url,

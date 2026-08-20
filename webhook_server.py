@@ -863,7 +863,7 @@ def _start_scheduler():
             func=_safe_run_eod,
             trigger=CronTrigger(day_of_week="mon-fri", hour=15, minute=35, timezone=IST),
             id="eod_monitor",
-            name="EOD sweep and position monitor",
+            name="EOD reconcile, position monitor, sweep",
         )
 
         # Weekly audit: Friday 16:00 IST
@@ -911,7 +911,15 @@ def _safe_run_cycle():
 
 def _safe_run_eod():
     try:
-        from main import run_eod_sweep, run_position_monitor
+        from main import (
+            run_eod_sweep,
+            run_position_monitor,
+            run_trade_reconciliation,
+        )
+        # Reconcile first: the monitor must evaluate stops against confirmed
+        # fills, and orders that were never placed must stop counting toward
+        # exposure before the portfolio gate reads it again tomorrow.
+        run_trade_reconciliation()
         run_position_monitor()
         run_eod_sweep()
     except Exception as e:

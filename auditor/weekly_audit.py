@@ -13,7 +13,7 @@ Two mandatory jobs (kept strictly separate):
      85%+), what was the actual win rate? Miscalibrated confidence means
      the whole pipeline's position sizing is wrong.
   2. Missed-opportunity / hypothesis review: what patterns appear in what
-     was NOT taken (NO_RESPONSE, REJECTED, SKIPPED)? Hypotheses go to
+     was NOT taken (NO_RESPONSE, REJECTED, SKIPPED, NOT_EXECUTED)? Hypotheses go to
      hypothesis_backlog — NOT directly to the live Researcher prompt.
      Paper-test before live adoption. Always.
 
@@ -52,7 +52,10 @@ If sample is < 3 closed trades in a bucket, say so explicitly and do not over-fi
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 TASK 2: MISSED OPPORTUNITY REVIEW
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Look at signals with status: NO_RESPONSE, REJECTED, or SKIPPED.
+Look at signals with status: NO_RESPONSE, REJECTED, SKIPPED, or NOT_EXECUTED
+(NOT_EXECUTED = the user approved it but the order never reached the market).
+Signals with status EXECUTED had a confirmed fill; APPROVED means the fill
+was never verified, so do not count those as taken trades.
 Describe any patterns you see. Were there genuine missed profits? Was the
 rejection/non-response systematically correlated with time of day, regime,
 or strategy type?
@@ -87,7 +90,7 @@ Output ONLY valid JSON (no markdown, no prose outside the JSON):
       "signals": 0, "closed_trades": 0, "wins": 0, "win_rate_pct": null, "notes": ""
     }
   },
-  "missed_opportunities": "narrative analysis of NO_RESPONSE / REJECTED / SKIPPED signals",
+  "missed_opportunities": "narrative analysis of NO_RESPONSE / REJECTED / SKIPPED / NOT_EXECUTED signals",
   "hypothesis_backlog": [
     {
       "hypothesis": "...",

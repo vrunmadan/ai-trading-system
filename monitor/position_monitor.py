@@ -153,8 +153,13 @@ def check_open_positions() -> None:
         # Step 1: Fetch current price
         # ----------------------------------------------------------------
         try:
-            q = kite.ltp(f"NSE:{ticker}")
-            current_price = q[f"NSE:{ticker}"]["last_price"]
+            # Use the position's own exchange. The trades table carries it
+            # now that the reconciler needs it to match Kite; before that this
+            # was hardcoded to NSE, so any BSE holding could never be priced.
+            pos_exchange = (pos.get("exchange") or "NSE").upper()
+            quote_key = f"{pos_exchange}:{ticker}"
+            q = kite.ltp(quote_key)
+            current_price = q[quote_key]["last_price"]
         except Exception as e:
             notes = f"Could not fetch LTP: {e}"
             log.error(f"{ticker}: {notes}")
@@ -212,11 +217,62 @@ def check_open_positions() -> None:
                     f"Regime flipped: entered in {entry_regime}, now {current_regime}"
                 )
             notes = " | ".join(reasons)
-            alerts.append(
-                f"🚨 {mode_tag}EXIT ALERT — {ticker}\n"
-                f"{notes}\n"
-                f"Review and consider closing this position."
-            )
+
+            # ------------------------------------------------------------
+            # Close the position — PAPER only.
+            #
+            # In PAPER mode the ledger IS the simulation, so closing it here
+            # is what lets a round trip finish: exit_price and pnl get
+            # written, the row leaves get_open_positions(), and the weekly
+            # Auditor finally has an outcome to calibrate confidence against.
+            #
+            # In LIVE mode the system never acts on your behalf (README,
+            # locked design decisions). Closing the row while the real Kite
+            # position is still open would make the ledger assert an exit
+            # that did not happen — a worse failure than not closing.
+            #
+            # Exit price is the observed LTP at check time, NOT stop_price.
+            # Filling at the stop line is the optimistic assumption the
+            # backtest makes; the live system only learns the stop broke at
+            # 15:35, so the honest simulated exit is the price it saw then.
+            # ------------------------------------------------------------
+            closed = False
+            if mode == "PAPER" and pos.get("fill_status") == "CONFIRMED":
+                try:
+                    from ledger.db import close_trade
+
+                    close_trade(trade_id, current_price)
+                    closed = True
+                    log.info(
+                        f"{ticker}: PAPER position closed in ledger at "
+                        f"₹{current_price:.2f} ({pnl_pct:+.1f}%)."
+                    )
+                except Exception as e:
+                    log.error(
+                        f"{ticker}: could not close paper trade {trade_id}: {e}",
+                        exc_info=True,
+                    )
+                    notes += " | LEDGER CLOSE FAILED — position still open"
+
+            if closed:
+                realised = (current_price - entry_price) * int(pos["quantity"])
+                alerts.append(
+                    f"🚨 {mode_tag}CLOSED — {ticker}\n"
+                    f"{notes}\n"
+                    f"Paper position closed at ₹{current_price:.2f} "
+                    f"({pnl_pct:+.1f}%, realised ₹{realised:,.0f})."
+                )
+            else:
+                followup = (
+                    "Review and consider closing this position."
+                    if mode != "PAPER"
+                    else "Not closed automatically — the fill was never confirmed."
+                )
+                alerts.append(
+                    f"🚨 {mode_tag}EXIT ALERT — {ticker}\n"
+                    f"{notes}\n"
+                    f"{followup}"
+                )
             log.warning(f"{ticker} INVALIDATED: {notes}")
 
         elif direction == "BUY" and pnl_pct <= -WEAKENING_PCT:
