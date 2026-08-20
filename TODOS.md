@@ -2,25 +2,6 @@
 
 ## Trading Pipeline
 
-### Ledger never records real trades — risk gates are structurally disarmed
-
-**What:** Design and build a way for the live approval flow to actually write to the `trades` table, so `risk_manager/portfolio_risk.py`'s circuit breakers, `risk_sizer/sizer.py`'s exposure checks, and `monitor/position_monitor.py`'s daily stop-loss check operate on real state instead of permanent zero.
-
-**Why:** `alerts/gmail_alert.py:handle_email_action()` — the function actually reached when you tap Approve — marks the signal APPROVED and redirects to a Kite basket URL. It never calls `log_trade()`. The only caller of `log_trade()` was `trader/kite_client.py:execute_trade()`, which itself has zero callers now that `telegram_bot.py` (its only caller) was deleted in this same review. Consequence: `get_open_positions()` always returns `[]`, `get_weekly_pnl()`/`get_all_time_pnl()` always return `0`, and every circuit breaker (drawdown, weekly loss, deployed-capital, position-count, sector-concentration) computes against permanently-empty state — they can never trip, no matter how much capital is actually deployed in your real Kite account. `position_monitor.py`'s daily stop-loss check also always finds zero positions and silently no-ops.
-
-**Context:** Surfaced by the outside-voice review (Claude subagent, Codex not installed) during `/plan-eng-review`, independently re-verified — grepped the whole repo, confirmed `log_trade()`/`execute_trade()` have no live callers, and re-read `handle_email_action()` line by line. `gmail_alert.py:329`'s own comment says "Position monitor will reconcile if the trade doesn't go through" but `position_monitor.py` never calls `kite.positions()`/`kite.holdings()` — that reconciliation was never built.
-
-Three design shapes were discussed and deferred to give this proper design time rather than rushing it mid-review:
-- **A — log optimistically at Approve time.** Fast, but Kite's basket URL lets you edit quantity/price before placing or skip placing entirely — creates permanent phantom trades in the ledger with no correction mechanism.
-- **B — reconcile-only against `kite.positions()`/`kite.holdings()`.** No phantom trades, but same-day signals can't see each other's exposure until the next reconciliation pass, and matching a live Kite position back to a `signal_id` needs a fuzzy-match heuristic (ticker+direction+quantity, no shared ID).
-- **C — hybrid (recommended going in).** Approve inserts a `PENDING` row immediately (same-day exposure visible right away, closes the "5 signals approved in a batch, none saw each other" gap too). The EOD position monitor — which already runs daily with a live Kite client — reconciles: found in `kite.positions()` → promote to `CONFIRMED` with real fill price; not found → `NOT_EXECUTED`, stop counting it, alert that the system thinks the order wasn't placed. More scope (new signal states, matching logic, monitor changes) but the only option that's both correct and closes the reconciliation gap.
-
-This is the single biggest finding from this review — worth its own design session, not a mid-review patch.
-
-**Effort:** XL
-**Priority:** P0
-**Depends on:** None — but should land before any consideration of moving off PAPER_MODE
-
 ### PAPER_MODE doesn't gate the live approval path
 
 **What:** Make `PAPER_MODE=true` actually prevent real Kite order screens from opening on Approve, matching what the README already documents.
@@ -81,16 +62,6 @@ This is the single biggest finding from this review — worth its own design ses
 **Priority:** P3
 **Depends on:** Possibly the ATR-based stop work already implied in sizer.py's docstring
 
-### Nothing ever calls close_trade — a paper round trip cannot complete
-
-**What:** Have the position monitor call `ledger.db.close_trade()` when a position is INVALIDATED (at minimum in PAPER mode).
-
-**Why:** `close_trade()` (`ledger/db.py:142`) is the only writer of `trades.exit_price`, `exit_time` and `pnl`, and it has zero callers anywhere in the repo. Even after the ledger TODO above is fixed and trades start being written, every position stays open forever: `get_open_positions()` grows without bound until the 5- and 6-position caps jam permanently, `pnl` is never written so `get_all_time_pnl()` stays 0, and the weekly Auditor's confidence-calibration task has no wins or losses to calibrate against. The stated goal of validating out-of-sample by paper trading is unreachable while this holds.
-
-**Effort:** S
-**Priority:** P0
-**Depends on:** The ledger TODO (needs trades rows to exist first).
-
 ### Drawdown circuit breaker cannot see unrealised losses
 
 **What:** Decide whether the -8% drawdown breaker should mark open positions to market, or document that it is realised-P&L-only by design.
@@ -111,12 +82,12 @@ This is the single biggest finding from this review — worth its own design ses
 
 ### Monitor silently skips positions it cannot price, and cannot price BSE at all
 
-**What:** Add an `exchange` column to `trades`, use it in the monitor LTP call, and raise an alert when a price fetch fails.
+**What:** Raise an alert when a price fetch fails. (PARTIALLY FIXED 2026-08-19: the `exchange` column now exists on `trades` and `monitor/position_monitor.py` uses it instead of a hardcoded `NSE:`, so BSE holdings can be priced. The silent-skip half is still open.)
 
 **Why:** `monitor/position_monitor.py:156` hardcodes `kite.ltp(f"NSE:{ticker}")`. The `trades` table (`ledger/schema.sql:27`) has no `exchange` column, so the monitor cannot know otherwise — `signals` has one, `trades` does not. For any BSE-listed holding the lookup fails, and the handler at :158-162 logs, writes a 0.0 price row, and continues **without appending to `alerts`** — so no email is sent. A position whose ticker cannot be priced is never stop-loss checked, indefinitely, and you are never told.
 
 **Effort:** S
-**Priority:** P1
+**Priority:** P2
 
 ### Backtest exits at the stop price; the live system emails you once a day
 
@@ -165,7 +136,7 @@ This is the single biggest finding from this review — worth its own design ses
 
 ### Approval links have no replay, double-tap or post-expiry guard
 
-**What:** Guard `handle_email_action` against re-approval, and against approving a signal the EOD sweep already marked NO_RESPONSE.
+**What:** Guard against approving a signal the EOD sweep already marked NO_RESPONSE, and expire links after the session. (PARTIALLY FIXED 2026-08-19: re-approval no longer writes a second trade row — the double-approve guard in `handle_email_action` returns the same basket without doubling recorded exposure. Link expiry and the post-sweep guard are still open.)
 
 **Why:** `verify_token` is a pure function of action + id + secret, so a link is valid forever. Tapping Approve twice redirects to Kite twice with no dedup; tapping it days later opens a basket against a stale thesis at a moved price; tapping it after the 15:35 sweep silently overwrites NO_RESPONSE back to APPROVED. Tapping Approve and then Reject leaves whichever was last, silently.
 
@@ -202,15 +173,6 @@ This is the single biggest finding from this review — worth its own design ses
 
 **Effort:** S
 **Priority:** P1
-
-### Approval writes status EXECUTED for trades that were never executed
-
-**What:** Introduce an honest intermediate state (e.g. `APPROVED_PENDING_FILL`); only a confirmed fill may set `EXECUTED`.
-
-**Why:** `ledger/db.py:108` does `status = "EXECUTED" if response == "APPROVED" else "MISSED"`. Approval only records intent and redirects to Kite — the user may never tap Place Order, may edit the quantity, or may close the tab. So the ledger asserts a fact the system has no evidence for, and downstream consumers trust it: `send_daily_cycle_summary` prints EXECUTED to you every evening, and `auditor/weekly_audit.py` feeds those rows to Gemini for confidence calibration, computing win rates over rows labelled EXECUTED that have no matching trade and no P&L. The audit cannot be correct, and will still look like it produced an answer. The vocabulary is also inconsistent: the auditor prompt (`weekly_audit.py:47`) asks Gemini to look for `NO_RESPONSE`/`REJECTED`/`SKIPPED` in `status`, but those live in `user_response` while `status` becomes `MISSED`.
-
-**Effort:** M
-**Priority:** P0
 
 ### microstructure_checks fails open — one Kite hiccup disables both circuit breakers
 
@@ -276,6 +238,70 @@ This is the single biggest finding from this review — worth its own design ses
 **Priority:** P3
 
 ## Completed
+
+### Approval writes status EXECUTED for trades that were never executed — FIXED 2026-08-20
+
+**Was:** `ledger/db.py:108` did `status = "EXECUTED" if response == "APPROVED" else "MISSED"`. Approving only records intent and redirects to Kite, so EXECUTED asserted a fill nobody had checked for. Worse, REJECTED and NO_RESPONSE both collapsed into `MISSED` — a value **nothing in the codebase ever read** — while `auditor/weekly_audit.py` asked Gemini to find signals with `status: NO_RESPONSE, REJECTED, SKIPPED`. Those names never appeared in that column, so TASK 2 (missed-opportunity review) had been querying for states the writer never wrote, and the calibration task counted unverified approvals as taken trades.
+
+**Fix — one meaning per value:**
+
+| status | meaning |
+|---|---|
+| `PENDING` | alert sent, awaiting response |
+| `APPROVED` | approved; fill NOT yet verified |
+| `EXECUTED` | fill confirmed — the only state asserting the trade happened |
+| `NOT_EXECUTED` | approved, but the order never reached the market |
+| `REJECTED` | rejected |
+| `NO_RESPONSE` | unanswered at the EOD sweep |
+| `SKIPPED` | dropped before the alert |
+
+- `update_signal_response` maps each response to its own honest status. `MISSED` is gone.
+- `mark_signal_executed()` / `mark_signal_not_executed()` added; the reconciler is the only caller, so EXECUTED is written in exactly one place, after a fill is established. A Kite outage or a row still inside the grace window leaves the signal APPROVED rather than claiming either outcome.
+- A simulated PAPER fill also reaches EXECUTED: within the simulation it did happen, and the Auditor needs it in the same bucket as a real fill to calibrate confidence against outcomes.
+- `auditor/weekly_audit.py` prompt updated — TASK 2 now also looks for NOT_EXECUTED, and Gemini is told explicitly that APPROVED means the fill was never verified so it must not be counted as a taken trade.
+
+**Backfill (idempotent, in the existing `init_db` migration block):** EXECUTED rows with no CONFIRMED trade are demoted to APPROVED, which is what actually happened; `MISSED` rows recover their true value from `user_response`, which kept it all along. Both are no-ops once applied, and a genuinely confirmed fill survives the demotion pass.
+
+**Tests:** `tests/test_signal_status.py`, 12 tests — the response mapping, no status ever being `MISSED`, every value in the Auditor's vocabulary actually being produced, EXECUTED only after a confirmed fill, APPROVED held during the grace window and during a Kite outage, and both backfill directions including idempotency. Full suite: 93 passed.
+
+
+
+### Nothing ever calls close_trade — FIXED 2026-08-19 (auto-close on INVALIDATED, paper only)
+
+**Was:** `close_trade()` had zero callers, so even once trades were recorded every position stayed open forever, `pnl` was never written, `get_all_time_pnl()` stayed 0, and the weekly Auditor had no wins or losses to calibrate against.
+
+**Fix:** `monitor/position_monitor.py` now calls `close_trade(trade_id, current_price)` when a position is INVALIDATED, **for PAPER rows with a CONFIRMED fill only**. The alert changes from "review and consider closing" to "closed at X (realised Y)".
+
+**Three decisions worth recording:**
+
+1. **PAPER only.** In paper mode the ledger *is* the simulation, so closing it is what completes the round trip. In LIVE mode the system never acts on your behalf (README, locked design decisions) — closing the row while the real Kite position is still open would make the ledger assert an exit that never happened, which is worse than not closing. LIVE positions still only alert. Closing them properly needs exit reconciliation against Kite (detecting a position has disappeared and at what price); that is not built.
+
+2. **Exit price is the observed LTP at 15:35, not `stop_price`.** Filling at the stop line is the optimistic assumption `streak_backtests/backtest.py` makes (it triggers on the intraday low and fills exactly at the line). The live monitor only learns the stop broke at 15:35, so the honest simulated exit is the price it actually saw. This deliberately makes paper results slightly worse than the backtest, and closer to reality — see the backtest exit-fill TODO.
+
+3. **CONFIRMED only.** A PENDING row deferred inside the reconciler grace window is not closed, because its fill was never established.
+
+**Also fixed here — a bug in the reconciler shipped earlier the same day:** PAPER rows are never sent to Kite, so reconciling them against `positions()`/`holdings()` found nothing and aged every one of them out to NOT_EXECUTED, which would have made a paper round trip impossible in exactly the way this entry describes. `monitor/trade_reconciler.py` now confirms an unmatched PAPER row as a *simulated* fill at the expected price. A PAPER row that IS found in Kite still takes the real fill, since `PAPER_MODE` does not currently gate the approval path and a paper-tagged signal can be placed for real.
+
+**Tests:** `tests/test_trade_reconciliation.py` grew to 20. New: simulated paper fill, real fill winning over the simulation, stop-triggered close, position left open while the thesis holds, close at observed price rather than the stop line, and LIVE never auto-closing. Four existing tests were repointed at LIVE approvals because the write-off and deferral paths are LIVE-only concerns; their PAPER expectations were what made paper trading impossible. Full suite: 81 passed.
+
+
+
+### Ledger never records real trades — FIXED 2026-08-19 (ledger hybrid)
+
+**Was:** nothing wrote to `trades`, so `get_open_positions()` always returned `[]`, `get_weekly_pnl()`/`get_all_time_pnl()` always returned 0, and every portfolio circuit breaker computed against permanently-empty state while logging "Portfolio risk gate: OK".
+
+**Fix — option C (the hybrid) from the original entry, as designed:**
+- `ledger/schema.sql` + `ledger/db.py` — `trades` gains `exchange`, `fill_status` (PENDING / CONFIRMED / NOT_EXECUTED) and `fill_note`, via the existing idempotent-migration list so the live Railway DB upgrades in place on boot. Verified against a simulated pre-change database: columns added, legacy rows preserved and defaulted to CONFIRMED (they were written by `execute_trade`, which places the order itself), `init_db` still idempotent.
+- `alerts/gmail_alert.py` — approving writes a PENDING trade row via `log_pending_trade()` using the real sized quantity, *before* marking the signal APPROVED, so a ledger failure aborts cleanly instead of leaving a signal APPROVED with no position. `entry_price` holds the expected price (approved capital / quantity) until reconciliation replaces it. A double-approve guard stops a second tap writing a second row.
+- `monitor/trade_reconciler.py` (new) — `reconcile_pending_trades()` merges `kite.positions()['net']` and `kite.holdings()` into one `EXCHANGE:SYMBOL` map and promotes each PENDING row to CONFIRMED (real average price, real quantity, partial fills recorded) or NOT_EXECUTED. Matching is on exchange *and* symbol. It never claims more than it asked for, defers rather than writing off inside a `MAX_PENDING_AGE_DAYS` grace window, and fails closed if Kite is unreachable — leaving rows PENDING and emailing, because marking them NOT_EXECUTED on an outage would silently erase real exposure.
+- `get_open_positions()` — now excludes NOT_EXECUTED and includes PENDING, so several signals approved in one batch each see the others' capital.
+- `main.py` / `webhook_server.py` — new `run_trade_reconciliation()` runs at 15:35 **before** the position monitor, so stops are evaluated against confirmed fills. Also exposed as `python main.py reconcile`.
+
+**Tests:** `tests/test_trade_reconciliation.py`, 14 tests — the PENDING write, same-day exposure visibility, the double-approve guard, confirmation from positions and from holdings, partial fills, the never-claim-more rule, exchange-aware matching, NOT_EXECUTED dropping out of exposure, the grace-period deferral, the Kite-outage fail-closed path, the no-op case, and a full round trip through `close_trade` into `get_all_time_pnl`. Full suite: 75 passed.
+
+**Still open:** the monitor alerts on INVALIDATED but does not call `close_trade`, so a round trip still needs a manual close — see the `close_trade` entry. Reconciliation matches on ticker + exchange, so a name you already held outside the system could in principle be matched; the no-pyramiding rule in the sizer makes that unlikely but it is not impossible.
+
+
 
 ### Approved position size never reaches the order — FIXED 2026-08-19
 
