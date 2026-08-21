@@ -280,7 +280,24 @@ def status():
         "ok":           bool(os.getenv("SCREENER_EMAIL") and os.getenv("SCREENER_PASSWORD")),
     }
 
-    # 7. Other env vars
+    # 7. LLM providers — reachability AND quota, not just "is the key set".
+    #    A present, valid, out-of-money key looks identical to a healthy one
+    #    until you actually call the API, which is how a QC outage went
+    #    unnoticed while /status reported "ok".
+    try:
+        from monitor.provider_health import check_all_providers
+
+        llm = check_all_providers()
+        checks["llm_providers"] = {
+            "ok": llm["ok"],
+            "degraded_by": llm["degraded_by"],
+            "qc_consecutive_errors": llm["qc_consecutive_errors"],
+            **llm["providers"],
+        }
+    except Exception as e:
+        checks["llm_providers"] = {"ok": False, "error": str(e)[:200]}
+
+    # 8. Other env vars
     checks["env"] = {
         "paper_mode":         os.getenv("PAPER_MODE", "true"),
         "total_capital_set":  bool(os.getenv("TOTAL_CAPITAL_INR")),
@@ -289,7 +306,9 @@ def status():
     }
 
     # Overall status
-    critical = ["email", "kite_token", "kite_config", "database"]
+    # llm_providers is critical: without OpenAI the QC gate blocks every
+    # trade, and without Anthropic no signal is generated at all.
+    critical = ["email", "kite_token", "kite_config", "database", "llm_providers"]
     all_ok = all(checks[k].get("ok", False) for k in critical)
 
     IST = pytz.timezone("Asia/Kolkata")
@@ -965,7 +984,10 @@ def _startup_health_check():
     if not kite_key or not kite_secret:
         issues.append("KITE_API_KEY / KITE_API_SECRET not set — Kite integration broken")
     if not os.getenv("APPROVAL_SECRET"):
-        issues.append("APPROVAL_SECRET not set — approve/reject links will use default (insecure)")
+        issues.append(
+            "APPROVAL_SECRET not set — every approve/reject link will fail "
+            "verification, so alerts cannot be acted on at all"
+        )
 
     resend_from = os.getenv("RESEND_FROM", "AI Trading System <onboarding@resend.dev>")
     if "onboarding@resend.dev" in resend_from:
@@ -974,6 +996,36 @@ def _startup_health_check():
             "used to sign up for Resend. If alerts aren't arriving, verify a domain at "
             "resend.com/domains and set RESEND_FROM=trading@yourdomain.com"
         )
+
+    # Providers: reachability and quota, not just presence of a key. This is
+    # the check that would have caught the QC outage on the first boot after
+    # the quota ran out.
+    try:
+        from monitor.provider_health import check_all_providers
+
+        llm = check_all_providers()
+        for name, r in llm["providers"].items():
+            role = r.get("role", name)
+            if r.get("ok"):
+                log.info(f"Provider {name} ({role}): OK")
+            else:
+                msg = (
+                    f"Provider {name} ({role}) UNAVAILABLE — "
+                    f"{r.get('error_class', 'unknown')}"
+                )
+                if r.get("critical"):
+                    issues.append(
+                        msg + ". The trading path is blocked until this is fixed."
+                    )
+                else:
+                    log.warning(msg + " (non-critical)")
+        if llm["qc_consecutive_errors"]:
+            issues.append(
+                f"QC has failed {llm['qc_consecutive_errors']} consecutive "
+                f"cycles — every qualifying trade is being blocked."
+            )
+    except Exception as e:
+        log.warning(f"Provider health check could not run: {e}")
 
     if issues:
         log.warning("=" * 60)
