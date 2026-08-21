@@ -161,13 +161,73 @@ def _fetch_vix(kite) -> tuple[float, float]:
             return 18.0, 0.0   # assume normal
 
 
+BREADTH_SAMPLE_SIZE = int(os.getenv("BREADTH_SAMPLE_SIZE", "20"))
+_SECTOR_CACHE = None
+
+
+def _breadth_sample(tickers: list[str], size: int = None) -> list[str]:
+    """
+    An evenly-spaced slice across the whole universe.
+
+    universe.csv is ordered by market cap, so the previous `tickers[:20]` read
+    the twenty largest names — six of them financials. That is the opposite of
+    a breadth measurement: breadth is meant to capture how WIDE participation
+    is, and sampling only megacaps reports a bullish reading precisely during
+    a narrowing late-cycle rally, which is when breadth matters most.
+
+    Striding across the sorted list keeps the sample cheap and deterministic
+    (same names every cycle, so readings are comparable) while spanning the
+    full capitalisation range.
+    """
+    size = size or BREADTH_SAMPLE_SIZE
+    if not tickers:
+        return []
+    if len(tickers) <= size:
+        return list(tickers)
+
+    # Split the cap-ordered universe into `size` equal bands and take one name
+    # from each, so the sample spans megacap to smallcap by construction.
+    # Within a band, prefer a name from a sector that is under-represented so
+    # far — a plain stride can land repeatedly on one sector, and a breadth
+    # reading dominated by (say) financials swings with that sector rather
+    # than with market participation.
+    sectors = _sector_map()
+    band = len(tickers) / size
+    picked, counts = [], {}
+    for i in range(size):
+        lo, hi = int(i * band), max(int((i + 1) * band), int(i * band) + 1)
+        candidates = tickers[lo:min(hi, len(tickers))] or [tickers[min(lo, len(tickers) - 1)]]
+        best = min(candidates, key=lambda t: counts.get(sectors.get(t, "?"), 0))
+        counts[sectors.get(best, "?")] = counts.get(sectors.get(best, "?"), 0) + 1
+        picked.append(best)
+    return picked
+
+
+def _sector_map() -> dict:
+    """Ticker -> sector, read once from the universe CSV. Empty on any failure
+    (the sample then degrades to a plain stride, which is still correct)."""
+    global _SECTOR_CACHE
+    if _SECTOR_CACHE is not None:
+        return _SECTOR_CACHE
+    try:
+        from universe.loader import load_universe
+
+        _SECTOR_CACHE = {e.ticker: e.sector for e in load_universe()}
+    except Exception:
+        _SECTOR_CACHE = {}
+    return _SECTOR_CACHE
+
+
 def _fetch_breadth(kite, tickers: list[str], instruments_map: dict) -> float:
     """
     % of sampled universe tickers where LTP > 50-day SMA.
-    Samples up to 20 tickers (enough for breadth signal; spares API quota).
-    Returns 50.0 (neutral) on complete failure.
+
+    The sample spans the whole universe rather than its top slice — see
+    _breadth_sample. Returns 50.0 (neutral) on complete failure, which is
+    itself a weakness: a total data outage is indistinguishable from a
+    genuinely balanced market. Logged loudly for that reason.
     """
-    sample = tickers[:20]
+    sample = _breadth_sample(tickers)
     from_date = (date.today() - timedelta(days=100)).strftime("%Y-%m-%d")
     to_date = date.today().strftime("%Y-%m-%d")
 
@@ -192,10 +252,18 @@ def _fetch_breadth(kite, tickers: list[str], instruments_map: dict) -> float:
             continue
 
     if total == 0:
-        log.warning("Could not compute breadth — returning neutral 50%")
+        log.warning(
+            "Could not compute breadth from any of the %d sampled tickers — "
+            "returning a neutral 50%%. This is a fallback, not a reading: the "
+            "regime score will be computed as if participation were exactly "
+            "balanced." % len(sample)
+        )
         return 50.0
     breadth = bullish / total * 100
-    log.debug(f"Breadth: {bullish}/{total} tickers above 50-SMA = {breadth:.0f}%")
+    log.info(
+        f"Breadth: {bullish}/{total} sampled tickers above their 50-SMA "
+        f"= {breadth:.0f}% (sample spans the full universe)"
+    )
     return round(breadth, 1)
 
 
