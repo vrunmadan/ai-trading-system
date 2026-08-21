@@ -130,7 +130,9 @@ Find reasons this is wrong. Output your verdict as JSON."""
     try:
         resp = client.chat.completions.create(
             model=QC_MODEL,
-            max_tokens=450,
+            # gpt-5.5 rejects `max_tokens` (400 unsupported_parameter) and
+            # requires `max_completion_tokens`. Verified live against the model.
+            max_completion_tokens=450,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},

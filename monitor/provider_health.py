@@ -106,7 +106,8 @@ def _probe_openai() -> dict:
         client = OpenAI(api_key=key, max_retries=0, timeout=15.0)
         client.chat.completions.create(
             model=os.getenv("QC_MODEL", "gpt-5.5"),
-            max_tokens=1,
+            # gpt-5.5 requires max_completion_tokens, not max_tokens (else 400).
+            max_completion_tokens=1,
             messages=[{"role": "user", "content": "ping"}],
         )
         return _result(True)
