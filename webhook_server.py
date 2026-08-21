@@ -47,6 +47,71 @@ PORT = int(os.getenv("PORT", 8080))
 # Health check
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Diagnostic auth
+#
+# These six endpoints used `secret != expected` — a non-constant-time compare —
+# against APPROVAL_SECRET, the same key that signs approve/reject HMACs. The
+# approval path itself correctly uses hmac.compare_digest, so the weakest
+# comparison in the system guarded the strongest capability: a timing oracle
+# here would have been a forgery oracle there.
+#
+# Two changes:
+#   1. constant-time comparison, in one place instead of six copies
+#   2. DIAGNOSTIC_SECRET as its own key, so exposing it (it travels in a query
+#      string, which lands in Railway access logs and browser history) does not
+#      hand over the ability to approve trades
+#
+# It falls back to APPROVAL_SECRET when unset so existing bookmarks keep
+# working through the deploy, but says so loudly at startup.
+# ---------------------------------------------------------------------------
+
+def _diagnostic_secret() -> tuple[str, bool]:
+    """Returns (expected_secret, is_dedicated). Empty string means unset."""
+    dedicated = os.getenv("DIAGNOSTIC_SECRET", "")
+    if dedicated:
+        return dedicated, True
+    return os.getenv("APPROVAL_SECRET", ""), False
+
+
+def _check_diagnostic_secret(provided: str) -> bool:
+    """Constant-time check. Fails closed when no secret is configured."""
+    import hmac
+
+    expected, _ = _diagnostic_secret()
+    if not expected or not provided:
+        return False
+    return hmac.compare_digest(provided, expected)
+
+
+def require_diagnostic_secret(as_json: bool = False):
+    """Gate a diagnostic route behind DIAGNOSTIC_SECRET (or APPROVAL_SECRET)."""
+    from functools import wraps
+
+    def decorator(fn):
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            from flask import make_response, request
+
+            if not _check_diagnostic_secret(request.args.get("secret", "")):
+                log.warning(
+                    f"Rejected unauthenticated request to {request.path}"
+                )
+                if as_json:
+                    return make_response(
+                        jsonify({"error": "Wrong or missing secret."}), 403
+                    )
+                return make_response(
+                    _html_response("Forbidden", "Wrong or missing secret.", False),
+                    403,
+                )
+            return fn(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
 @app.route("/", methods=["GET"])
 def health():
     return jsonify({"status": "ok", "service": "AI Trading System webhook server"})
@@ -207,9 +272,8 @@ def status():
     import pytz
     from flask import make_response
 
-    secret = request.args.get("secret", "")
-    expected = os.getenv("APPROVAL_SECRET", "")
-    if not expected or secret != expected:
+    if not _check_diagnostic_secret(request.args.get("secret", "")):
+        log.warning(f"Rejected unauthenticated request to {request.path}")
         return make_response(jsonify({"error": "Wrong or missing secret."}), 403)
 
     checks = {}
@@ -302,6 +366,7 @@ def status():
         "paper_mode":         os.getenv("PAPER_MODE", "true"),
         "total_capital_set":  bool(os.getenv("TOTAL_CAPITAL_INR")),
         "approval_secret_set": bool(os.getenv("APPROVAL_SECRET", "")),
+        "diagnostic_secret_dedicated": _diagnostic_secret()[1],
         "google_sheets_set":  bool(os.getenv("GOOGLE_SHEETS_CREDENTIALS_JSON")),
     }
 
@@ -336,9 +401,8 @@ def send_test_email():
       https://ai-trading-system-production-6af9.up.railway.app/send_test_email?secret=<APPROVAL_SECRET>
     """
     from flask import make_response
-    secret = request.args.get("secret", "")
-    expected = os.getenv("APPROVAL_SECRET", "")
-    if not expected or secret != expected:
+    if not _check_diagnostic_secret(request.args.get("secret", "")):
+        log.warning(f"Rejected unauthenticated request to {request.path}")
         return make_response(_html_response("Forbidden", "Wrong or missing secret.", False), 403)
 
     try:
@@ -374,9 +438,8 @@ def diagnose_cycle():
     """
     from flask import make_response
 
-    secret = request.args.get("secret", "")
-    expected = os.getenv("APPROVAL_SECRET", "")
-    if not expected or secret != expected:
+    if not _check_diagnostic_secret(request.args.get("secret", "")):
+        log.warning(f"Rejected unauthenticated request to {request.path}")
         return make_response(_html_response("Forbidden", "Wrong or missing secret.", False), 403)
 
     try:
@@ -610,9 +673,8 @@ def cycle_history():
     """
     from flask import make_response
 
-    secret = request.args.get("secret", "")
-    expected = os.getenv("APPROVAL_SECRET", "")
-    if not expected or secret != expected:
+    if not _check_diagnostic_secret(request.args.get("secret", "")):
+        log.warning(f"Rejected unauthenticated request to {request.path}")
         return make_response(_html_response("Forbidden", "Wrong or missing secret.", False), 403)
 
     try:
@@ -765,9 +827,8 @@ def diagnose_universe():
     """
     from flask import make_response
 
-    secret = request.args.get("secret", "")
-    expected = os.getenv("APPROVAL_SECRET", "")
-    if not expected or secret != expected:
+    if not _check_diagnostic_secret(request.args.get("secret", "")):
+        log.warning(f"Rejected unauthenticated request to {request.path}")
         return make_response(_html_response("Forbidden", "Wrong or missing secret.", False), 403)
 
     try:
@@ -811,9 +872,8 @@ def refresh_universe():
     """
     from flask import make_response
 
-    secret = request.args.get("secret", "")
-    expected = os.getenv("APPROVAL_SECRET", "")
-    if not expected or secret != expected:
+    if not _check_diagnostic_secret(request.args.get("secret", "")):
+        log.warning(f"Rejected unauthenticated request to {request.path}")
         return make_response(_html_response("Forbidden", "Wrong or missing secret.", False), 403)
 
     try:
@@ -987,6 +1047,15 @@ def _startup_health_check():
         issues.append(
             "APPROVAL_SECRET not set — every approve/reject link will fail "
             "verification, so alerts cannot be acted on at all"
+        )
+
+    if not os.getenv("DIAGNOSTIC_SECRET"):
+        issues.append(
+            "DIAGNOSTIC_SECRET not set — diagnostic endpoints fall back to "
+            "APPROVAL_SECRET, the same key that signs approve/reject links. "
+            "That secret travels in the URL query string and lands in access "
+            "logs, so leaking it would also allow forged trade approvals. Set "
+            "DIAGNOSTIC_SECRET to a separate random value."
         )
 
     resend_from = os.getenv("RESEND_FROM", "AI Trading System <onboarding@resend.dev>")
