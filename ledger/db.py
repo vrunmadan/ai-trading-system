@@ -94,8 +94,15 @@ def now_ist() -> str:
 # Signal logging
 # ---------------------------------------------------------------------------
 
-def log_signal(signal, sizing, qc_verdict=None) -> int:
-    """Insert a signal record and return its row ID."""
+def log_signal(signal, sizing, qc_verdict=None, status: str = "PENDING") -> int:
+    """
+    Insert a signal record and return its row ID.
+
+    status defaults to PENDING (an alert is about to go out). Signals killed
+    at the QC gate are logged too, with QC_BLOCKED or QC_ERROR, so a blocked
+    candidate leaves a trace instead of vanishing — the daily summary counts
+    them and the weekly Auditor can review them as missed opportunities.
+    """
     with get_db() as conn:
         cur = conn.execute(
             """
@@ -122,7 +129,7 @@ def log_signal(signal, sizing, qc_verdict=None) -> int:
                 sizing.quantity,
                 sizing.capital_to_deploy,
                 sizing.notes,
-                "PENDING",
+                status,
             ),
         )
         return cur.lastrowid
@@ -426,6 +433,63 @@ def get_kite_token() -> str | None:
             return row[0] if row else None
     except Exception:
         return None
+
+
+# ---------------------------------------------------------------------------
+# QC health — consecutive-error streak
+#
+# Persisted rather than held in memory so it survives the redeploys that reset
+# every other in-process counter in this system.
+# ---------------------------------------------------------------------------
+
+_QC_STREAK_KEY = "qc_error_streak"
+
+
+def get_qc_error_streak() -> int:
+    """How many consecutive QC calls have failed. 0 when QC is healthy."""
+    try:
+        _ensure_kv_store()
+        with sqlite3.connect(DB_PATH) as conn:
+            row = conn.execute(
+                "SELECT value FROM kv_store WHERE key=?", (_QC_STREAK_KEY,)
+            ).fetchone()
+        return int(row[0]) if row else 0
+    except Exception:
+        return 0
+
+
+def record_qc_error() -> int:
+    """Increment the streak and return its new value."""
+    streak = get_qc_error_streak() + 1
+    try:
+        _ensure_kv_store()
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute(
+                """
+                INSERT INTO kv_store (key, value, updated_at) VALUES (?,?,?)
+                ON CONFLICT(key) DO UPDATE
+                    SET value = excluded.value, updated_at = excluded.updated_at
+                """,
+                (_QC_STREAK_KEY, str(streak), now_ist()),
+            )
+            conn.commit()
+    except Exception as e:
+        log_ = __import__("logging").getLogger(__name__)
+        log_.error(f"Could not persist QC error streak: {e}")
+    return streak
+
+
+def reset_qc_error_streak() -> None:
+    """Called after any QC call that produced a genuine verdict."""
+    try:
+        _ensure_kv_store()
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute(
+                "DELETE FROM kv_store WHERE key=?", (_QC_STREAK_KEY,)
+            )
+            conn.commit()
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------

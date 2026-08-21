@@ -52,8 +52,13 @@ If sample is < 3 closed trades in a bucket, say so explicitly and do not over-fi
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 TASK 2: MISSED OPPORTUNITY REVIEW
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Look at signals with status: NO_RESPONSE, REJECTED, SKIPPED, or NOT_EXECUTED
-(NOT_EXECUTED = the user approved it but the order never reached the market).
+Look at signals with status: NO_RESPONSE, REJECTED, SKIPPED, NOT_EXECUTED,
+QC_BLOCKED, or QC_ERROR
+(NOT_EXECUTED = approved but the order never reached the market.
+ QC_BLOCKED = QC reviewed it and genuinely refused it, which is QC working.
+ QC_ERROR = QC could not be reached at all, so the trade was lost to an
+ infrastructure fault rather than to a judgement. Call these out separately;
+ a run of QC_ERROR means the system was degraded, not selective.)
 Signals with status EXECUTED had a confirmed fill; APPROVED means the fill
 was never verified, so do not count those as taken trades.
 Describe any patterns you see. Were there genuine missed profits? Was the
@@ -90,7 +95,7 @@ Output ONLY valid JSON (no markdown, no prose outside the JSON):
       "signals": 0, "closed_trades": 0, "wins": 0, "win_rate_pct": null, "notes": ""
     }
   },
-  "missed_opportunities": "narrative analysis of NO_RESPONSE / REJECTED / SKIPPED / NOT_EXECUTED signals",
+  "missed_opportunities": "narrative analysis of NO_RESPONSE / REJECTED / SKIPPED / NOT_EXECUTED / QC_BLOCKED / QC_ERROR signals",
   "hypothesis_backlog": [
     {
       "hypothesis": "...",

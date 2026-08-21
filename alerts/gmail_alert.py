@@ -525,6 +525,75 @@ def send_eod_missed_opportunities() -> None:
     )
 
 
+def send_qc_unreachable_alert(signal_id, signal, sizing, qc_verdict, streak: int) -> bool:
+    """
+    Fired the moment a real, sized candidate is dropped because QC could not
+    be reached.
+
+    Deliberately immediate rather than batched into the EOD summary: a blocked
+    trade is only actionable while the market is open, and the point of this
+    alert is that the user finds out in time to do something about it.
+
+    No Approve/Reject links. The thesis was never validated, so there is
+    nothing safe to approve. This is a notification, not a decision.
+    """
+    ticker = signal.ticker
+    streak_line = (
+        f"This is failure #{streak} in a row."
+        if streak > 1 else "This is the first failure in the current run."
+    )
+    body = (
+        "A trade signal cleared the Researcher AND the Risk Sizer, then was "
+        "blocked because the QC fact-checker could not be reached.\n\n"
+        "This is NOT a QC rejection. QC never answered.\n"
+        + "=" * 52 + "\n\n"
+        f"  Ticker      {ticker} ({getattr(signal, 'exchange', 'NSE')})\n"
+        f"  Direction   {signal.direction}\n"
+        f"  Strategy    {signal.strategy_bucket}\n"
+        f"  Regime      {signal.regime.value}\n"
+        f"  Confidence  {signal.confidence_score:.0f}%\n"
+        f"  Sized at    Rs {sizing.capital_to_deploy:,.0f} "
+        f"({sizing.quantity} shares)\n"
+        f"  Signal ID   {signal_id if signal_id else 'not logged'}\n\n"
+        f"WHY QC FAILED:\n{qc_verdict.rationale}\n\n"
+        f"{streak_line}\n\n"
+        "No order was placed and no Approve/Reject link was issued, because "
+        "the thesis was never validated. The signal is recorded as QC_ERROR "
+        "for the weekly audit.\n\n"
+        "Until QC recovers, every qualifying trade will be blocked this way."
+    )
+    return send_plain_email(
+        subject=f"\u26a0 Trade blocked \u2014 QC unreachable ({ticker})",
+        body=body,
+    )
+
+
+def send_qc_down_alert(streak: int) -> bool:
+    """
+    One ops alert when the consecutive-failure streak first crosses the
+    threshold. Sent once per outage, not per cycle: the per-signal alert
+    already fires every time a trade is actually lost.
+    """
+    return send_plain_email(
+        subject=f"\U0001f6a8 QC has failed {streak} cycles in a row \u2014 system degraded",
+        body=(
+            f"The QC fact-checker has now failed {streak} consecutive times.\n\n"
+            "Every trade signal that clears the Researcher and the Risk Sizer "
+            "is being blocked at the QC gate. The system is generating signals "
+            "and shipping none of them.\n\n"
+            "Common causes, cheapest first:\n"
+            "  - OPENAI_API_KEY quota exhausted (429 insufficient_quota)\n"
+            "  - OPENAI_API_KEY missing, revoked, or rotated\n"
+            "  - QC_MODEL name not available to the account\n"
+            "  - OpenAI API outage\n\n"
+            "Check provider health:\n"
+            f"  {RAILWAY_URL}/status?secret=<APPROVAL_SECRET>\n\n"
+            "This alert is sent once per outage. You will keep receiving a "
+            "per-signal alert for each trade that gets blocked."
+        ),
+    )
+
+
 def send_daily_cycle_summary() -> None:
     """
     Sent at 15:35 IST alongside the EOD sweep.
@@ -544,10 +613,22 @@ def send_daily_cycle_summary() -> None:
 
     with get_db() as conn:
         signals_today = conn.execute(
-            "SELECT id, ticker, exchange, direction, confidence_score, status, created_at "
+            "SELECT id, ticker, exchange, direction, confidence_score, status, "
+            "qc_verdict, qc_rationale, created_at "
             "FROM signals WHERE DATE(created_at) = ? ORDER BY created_at",
             (today_ist,)
         ).fetchall()
+
+    # Three outcomes that must never be collapsed into one another:
+    #   alerted    a candidate cleared QC and an Approve/Reject alert went out
+    #   qc_blocked a candidate cleared 75% and QC genuinely refused it
+    #   qc_errored a candidate cleared 75% and QC could not be reached
+    # The third is a system fault. Reporting it as "no signals today" is what
+    # let an exhausted API quota look exactly like a quiet market.
+    qc_errored = [r for r in signals_today if r["status"] == "QC_ERROR"]
+    qc_blocked = [r for r in signals_today if r["status"] == "QC_BLOCKED"]
+    alerted = [r for r in signals_today
+               if r["status"] not in ("QC_ERROR", "QC_BLOCKED")]
 
     # Pull today's cycle log for best scores
     try:
@@ -568,18 +649,50 @@ def send_daily_cycle_summary() -> None:
     except Exception:
         top_block = ""
 
-    if signals_today:
-        signal_lines = "\n".join(
-            f"  • {r['direction']} {r['ticker']} ({r['exchange']}) — "
-            f"{r['confidence_score']:.0f}% confidence — {r['status']}"
-            for r in signals_today
+    def _lines(rows):
+        return "\n".join(
+            f"  • {r['direction']} {r['ticker']} ({r['exchange']}) "
+            f"\u2014 {r['confidence_score']:.0f}% confidence \u2014 {r['status']}"
+            for r in rows
         )
-        signal_block = f"Signals generated today:\n{signal_lines}"
-    else:
-        signal_block = "No signals reached the confidence threshold today (75%+ required)."
 
+    blocks = []
+
+    if qc_errored:
+        blocks.append(
+            "\U0001f6a8 SYSTEM DEGRADED \u2014 QC WAS UNREACHABLE\n"
+            f"{len(qc_errored)} candidate(s) cleared the 75% threshold and were "
+            "sized, then blocked because the QC fact-checker could not be "
+            "reached. These are NOT rejections \u2014 they are trades lost to an "
+            "infrastructure fault.\n"
+            f"{_lines(qc_errored)}\n"
+            f"  Last error: {(qc_errored[-1]['qc_rationale'] or '')[:200]}"
+        )
+
+    if qc_blocked:
+        blocks.append(
+            "QC reviewed and blocked:\n"
+            f"{len(qc_blocked)} candidate(s) cleared 75% but QC returned a "
+            "genuine DISAGREE / NEEDS_MORE_DATA. This is QC working as "
+            "intended.\n"
+            f"{_lines(qc_blocked)}"
+        )
+
+    if alerted:
+        blocks.append(f"Signals alerted today:\n{_lines(alerted)}")
+
+    if not blocks:
+        blocks.append(
+            "No candidate cleared the 75% confidence threshold today.\n"
+            "  (QC was not the blocker \u2014 nothing reached it.)"
+        )
+
+    signal_block = "\n\n".join(blocks)
+
+    degraded = bool(qc_errored)
     body = (
-        f"Daily research cycle summary — {today_ist}\n"
+        f"Daily research cycle summary \u2014 {today_ist}"
+        f"{'  [SYSTEM DEGRADED]' if degraded else ''}\n"
         f"{'=' * 50}\n\n"
         f"{signal_block}"
         f"{top_block}\n\n"

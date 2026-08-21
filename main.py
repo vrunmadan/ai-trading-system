@@ -34,6 +34,11 @@ log = logging.getLogger(__name__)
 
 PAPER_MODE = os.getenv("PAPER_MODE", "true").lower() == "true"
 
+# Consecutive failed QC calls before one ops alert goes out. The
+# per-signal "trade blocked" alert is unconditional; this only governs
+# the extra "QC has been down for N cycles" mail.
+QC_ERROR_ALERT_THRESHOLD = int(os.getenv("QC_ERROR_ALERT_THRESHOLD", "3"))
+
 
 # ---------------------------------------------------------------------------
 # Research cycle (called hourly by scheduler and optionally by run_server.py)
@@ -189,12 +194,64 @@ def run_cycle() -> None:
         log.error(f"QC failed: {e}", exc_info=True)
         return
 
+    # ----------------------------------------------------------------
+    # QC gate. Both branches below block the trade — that is the correct
+    # fail-safe. They are separated because they mean opposite things:
+    # a genuine verdict is QC working, an errored one is QC unreachable,
+    # and only the second means the system is degraded.
+    # ----------------------------------------------------------------
+    if qc_verdict.errored:
+        # QC never answered. A real, sized, high-confidence candidate is
+        # being dropped because of an infrastructure fault, so say so NOW —
+        # at EOD is too late to act on a trade.
+        from alerts.gmail_alert import send_qc_down_alert, send_qc_unreachable_alert
+        from ledger.db import record_qc_error
+
+        streak = record_qc_error()
+        log.error(
+            f"TRADE BLOCKED BY QC FAILURE — {signal.ticker} "
+            f"({signal.strategy_bucket}, {signal.confidence_score:.0f}% confidence, "
+            f"₹{sizing.capital_to_deploy:,.0f} sized) was dropped because QC could "
+            f"not be reached. Consecutive QC failures: {streak}. "
+            f"Reason: {qc_verdict.rationale[:200]}"
+        )
+
+        try:
+            signal_id = log_signal(signal, sizing, qc_verdict, status="QC_ERROR")
+        except Exception as e:
+            signal_id = None
+            log.error(f"Could not log QC_ERROR signal: {e}", exc_info=True)
+
+        try:
+            send_qc_unreachable_alert(signal_id, signal, sizing, qc_verdict, streak)
+        except Exception as e:
+            log.error(f"Could not send QC-unreachable alert: {e}", exc_info=True)
+
+        # One ops alert when the streak first crosses the threshold. The
+        # per-signal alert above still fires every time, so silence here is
+        # not silence overall — it just stops duplicate ops mail.
+        if streak == QC_ERROR_ALERT_THRESHOLD:
+            try:
+                send_qc_down_alert(streak)
+            except Exception as e:
+                log.error(f"Could not send QC-down ops alert: {e}", exc_info=True)
+        return
+
+    # QC answered, so the streak is broken regardless of what it decided.
+    try:
+        from ledger.db import reset_qc_error_streak
+
+        reset_qc_error_streak()
+    except Exception:
+        pass
+
     if qc_verdict.verdict != "AGREE":
-        # NEEDS_MORE_DATA is documented as a safe default that blocks the
-        # trade (qc_factchecker/validator.py) — it must gate here too, not
-        # just DISAGREE, or a QC API outage/missing key/parse error ships
-        # the signal exactly as if QC had passed.
+        # A genuine DISAGREE / NEEDS_MORE_DATA. QC did its job.
         log.info(f"QC {qc_verdict.verdict} — {qc_verdict.rationale[:120]}")
+        try:
+            log_signal(signal, sizing, qc_verdict, status="QC_BLOCKED")
+        except Exception as e:
+            log.error(f"Could not log QC_BLOCKED signal: {e}", exc_info=True)
         return
 
     # ----------------------------------------------------------------
