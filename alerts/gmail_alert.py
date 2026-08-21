@@ -594,6 +594,76 @@ def send_qc_down_alert(streak: int) -> bool:
     )
 
 
+# Human-readable explanation per pre-QC drop stage. Keys are the signal
+# `status` values written by main.py when a 75%+ candidate is dropped BEFORE
+# it ever reaches QC. These used to return silently — the whole point here is
+# that a qualifying trade can no longer vanish without a trace or a heads-up.
+_DROP_STAGE_BLURB = {
+    "DROPPED_SIZER": (
+        "the Risk Sizer rejected it (a portfolio rule blocked the position — "
+        "e.g. sector cap full, max concurrent positions, weekly drawdown, or "
+        "already holding this name)."
+    ),
+    "DROPPED_NO_PRICE": (
+        "a live price could not be fetched from Kite, so the order could not "
+        "be sized. This is usually the daily Kite login having expired — tap "
+        "the morning 'Login with Kite' email to restore it."
+    ),
+    "DROPPED_SUBMIN": (
+        "after applying all constraints the position came out below the "
+        "minimum tradeable size, so it was not worth the transaction cost."
+    ),
+}
+
+
+def send_candidate_dropped_alert(signal_id, signal, sizing, status: str) -> bool:
+    """
+    Fired the moment a candidate that cleared the 75% confidence bar is dropped
+    BEFORE reaching QC — at the Risk Sizer or the price/size step.
+
+    Immediate, not batched: like the QC-unreachable alert, a missed trade is
+    only actionable while the market is open. No Approve/Reject links — the
+    thesis was never QC-validated, so there is nothing safe to approve. This is
+    a heads-up, not a decision.
+    """
+    ticker = signal.ticker
+    why = _DROP_STAGE_BLURB.get(status, "it was dropped before QC.")
+    system_fault = status == "DROPPED_NO_PRICE"
+    sized_line = (
+        f"  Sizer said  Rs {sizing.capital_to_deploy:,.0f}\n"
+        if getattr(sizing, "capital_to_deploy", 0) else ""
+    )
+    body = (
+        "A trade signal cleared the Researcher's 75% confidence bar, then was "
+        "dropped BEFORE the QC fact-checker ran.\n\n"
+        "This is NOT a QC rejection and NOT a quiet market — it is a candidate "
+        "that would otherwise have gone to QC and possibly to you as an "
+        "Approve/Reject alert.\n"
+        + "=" * 52 + "\n\n"
+        f"  Ticker      {ticker} ({getattr(signal, 'exchange', 'NSE')})\n"
+        f"  Direction   {signal.direction}\n"
+        f"  Strategy    {signal.strategy_bucket}\n"
+        f"  Regime      {signal.regime.value}\n"
+        f"  Confidence  {signal.confidence_score:.0f}%\n"
+        f"{sized_line}"
+        f"  Stage       {status}\n"
+        f"  Signal ID   {signal_id if signal_id else 'not logged'}\n\n"
+        f"WHY IT WAS DROPPED:\n  {why}\n\n"
+        "No order was placed and no Approve/Reject link was issued. The signal "
+        f"is recorded as {status} for the daily summary and the weekly audit.\n"
+        + (
+            "\nACTION: this looks like an infrastructure fault, not a risk "
+            "decision — it is worth fixing now so live candidates stop being "
+            "dropped.\n" if system_fault else ""
+        )
+    )
+    subject_tag = "⚠ Trade dropped pre-QC"
+    return send_plain_email(
+        subject=f"{subject_tag} — {status.replace('DROPPED_', '').title()} ({ticker})",
+        body=body,
+    )
+
+
 def send_daily_cycle_summary() -> None:
     """
     Sent at 15:35 IST alongside the EOD sweep.
@@ -627,8 +697,14 @@ def send_daily_cycle_summary() -> None:
     # let an exhausted API quota look exactly like a quiet market.
     qc_errored = [r for r in signals_today if r["status"] == "QC_ERROR"]
     qc_blocked = [r for r in signals_today if r["status"] == "QC_BLOCKED"]
+    # Cleared 75% but dropped BEFORE QC (sizer / price / min-size). These used
+    # to leave no signals-table row at all, so the summary called them "nothing
+    # cleared." Now they are recorded and counted here as a distinct outcome.
+    dropped = [r for r in signals_today
+               if (r["status"] or "").startswith("DROPPED")]
     alerted = [r for r in signals_today
-               if r["status"] not in ("QC_ERROR", "QC_BLOCKED")]
+               if r["status"] not in ("QC_ERROR", "QC_BLOCKED")
+               and not (r["status"] or "").startswith("DROPPED")]
 
     # Pull today's cycle log for best scores
     try:
@@ -678,6 +754,23 @@ def send_daily_cycle_summary() -> None:
             f"{_lines(qc_blocked)}"
         )
 
+    if dropped:
+        no_price = [r for r in dropped if r["status"] == "DROPPED_NO_PRICE"]
+        header = (
+            "⚠ CLEARED 75% BUT DROPPED BEFORE QC\n"
+            f"{len(dropped)} candidate(s) cleared the Researcher's 75% bar but "
+            "never reached QC — dropped at the Risk Sizer or the price/size "
+            "step. These are NOT quiet-market cycles; each was a real "
+            "qualifying signal.\n"
+        )
+        if no_price:
+            header += (
+                "  At least one was dropped because a live price could not be "
+                "fetched (Kite login likely expired) — that is an "
+                "infrastructure fault, not a risk decision.\n"
+            )
+        blocks.append(header + _lines(dropped))
+
     if alerted:
         blocks.append(f"Signals alerted today:\n{_lines(alerted)}")
 
@@ -689,7 +782,11 @@ def send_daily_cycle_summary() -> None:
 
     signal_block = "\n\n".join(blocks)
 
-    degraded = bool(qc_errored)
+    # A missing live price is a system fault (usually an expired Kite login),
+    # so a price-driven drop marks the day degraded just like a QC outage does.
+    degraded = bool(qc_errored) or any(
+        r["status"] == "DROPPED_NO_PRICE" for r in dropped
+    )
     body = (
         f"Daily research cycle summary \u2014 {today_ist}"
         f"{'  [SYSTEM DEGRADED]' if degraded else ''}\n"

@@ -205,6 +205,26 @@ def skip_signal(signal_id: int, reason: str):
         )
 
 
+def count_signals_today(ticker: str, status: str) -> int:
+    """How many signals with this ticker+status were logged today (IST).
+
+    Used to throttle the immediate pre-QC drop alert to once per ticker+reason
+    per day: a 75%+ candidate that keeps getting dropped every hourly cycle is
+    worth one heads-up, not one email an hour.
+    """
+    import datetime
+    import pytz
+
+    d = datetime.datetime.now(pytz.timezone("Asia/Kolkata")).strftime("%Y-%m-%d")
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM signals "
+            "WHERE ticker=? AND status=? AND DATE(created_at)=?",
+            (ticker, status, d),
+        ).fetchone()
+    return row["n"] if row else 0
+
+
 # ---------------------------------------------------------------------------
 # Trade logging
 # ---------------------------------------------------------------------------

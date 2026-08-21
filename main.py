@@ -40,6 +40,44 @@ PAPER_MODE = os.getenv("PAPER_MODE", "true").lower() == "true"
 QC_ERROR_ALERT_THRESHOLD = int(os.getenv("QC_ERROR_ALERT_THRESHOLD", "3"))
 
 
+def _drop_candidate_before_qc(signal, sizing, status: str) -> None:
+    """A candidate cleared the 75% bar but was dropped BEFORE QC — at the Risk
+    Sizer, the live-price fetch, or the minimum-size check.
+
+    These paths used to `return` silently: no signals-table row, no email, so
+    the EOD summary reported "nothing cleared" even though something had. This
+    records the drop (so the daily summary and the weekly Auditor see it) and
+    sends ONE immediate heads-up per ticker+reason per day (deduped, so an
+    hourly-recurring drop does not spam the inbox).
+    """
+    from ledger.db import log_signal, count_signals_today
+    from alerts.gmail_alert import send_candidate_dropped_alert
+
+    try:
+        already = count_signals_today(signal.ticker, status)
+    except Exception as e:
+        log.error(f"Dropped-candidate dedupe check failed: {e}")
+        already = 0
+
+    signal_id = None
+    try:
+        signal_id = log_signal(signal, sizing, status=status)
+    except Exception as e:
+        log.error(
+            f"Could not log {status} signal for {signal.ticker}: {e}",
+            exc_info=True,
+        )
+
+    if already == 0:
+        try:
+            send_candidate_dropped_alert(signal_id, signal, sizing, status)
+        except Exception as e:
+            log.error(
+                f"Could not send dropped-candidate alert for {signal.ticker}: {e}",
+                exc_info=True,
+            )
+
+
 # ---------------------------------------------------------------------------
 # Research cycle (called hourly by scheduler and optionally by run_server.py)
 # ---------------------------------------------------------------------------
@@ -146,6 +184,7 @@ def run_cycle() -> None:
 
     if not sizing.approved:
         log.info(f"Risk Sizer rejected: {sizing.notes}")
+        _drop_candidate_before_qc(signal, sizing, "DROPPED_SIZER")
         return
 
     # ----------------------------------------------------------------
@@ -165,10 +204,12 @@ def run_cycle() -> None:
             f"Could not fetch LTP for {signal.ticker} — cannot size the order: {e}",
             exc_info=True,
         )
+        _drop_candidate_before_qc(signal, sizing, "DROPPED_NO_PRICE")
         return
 
     if not ltp or ltp <= 0:
         log.error(f"Invalid LTP ({ltp!r}) for {signal.ticker} — cannot size the order.")
+        _drop_candidate_before_qc(signal, sizing, "DROPPED_NO_PRICE")
         return
 
     sizing.quantity = int(sizing.capital_to_deploy // ltp)
@@ -177,6 +218,7 @@ def run_cycle() -> None:
             f"{signal.ticker}: approved capital \u20b9{sizing.capital_to_deploy:,.0f} "
             f"buys less than one share at \u20b9{ltp:,.2f} — skipping."
         )
+        _drop_candidate_before_qc(signal, sizing, "DROPPED_SUBMIN")
         return
 
     log.info(
