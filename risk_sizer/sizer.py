@@ -6,13 +6,47 @@ asking your analyst to also run the compliance desk — different job,
 different standards. This module is the compliance desk.
 """
 
+import logging
 import os
 from dataclasses import dataclass
 
 # Hard limits — pulled from .env, with conservative defaults
 TOTAL_CAPITAL = float(os.getenv("TOTAL_CAPITAL_INR", 1_000_000))
 MAX_POSITION_PCT = float(os.getenv("MAX_POSITION_PCT_OF_CAPITAL", 20))   # max 20% per trade
-MAX_SECTOR_PCT = float(os.getenv("MAX_SECTOR_PCT_OF_CAPITAL", 35))       # max 35% in any sector
+_SIZER_SECTOR_PCT = float(os.getenv("MAX_SECTOR_PCT_OF_CAPITAL", 35))   # per-trade ceiling
+_GATE_SECTOR_PCT = float(os.getenv("MAX_SECTOR_PCT", 30))               # portfolio halt threshold
+
+# There are two sector limits in this system and they govern different things:
+#
+#   MAX_SECTOR_PCT            (risk_manager/portfolio_risk.py, default 30%)
+#       A portfolio circuit breaker. If any sector exceeds it, the ENTIRE
+#       cycle halts — including trades in completely unrelated sectors.
+#
+#   MAX_SECTOR_PCT_OF_CAPITAL (here, default 35%)
+#       A per-trade ceiling. Caps how much a single new position may add.
+#
+# Configured as 35 > 30, the per-trade ceiling was looser than the halt
+# threshold, which opens a self-defeating band:
+#
+#   sector at 33% of capital -> this sizer happily allows more
+#                            -> next cycle the portfolio gate sees 33% > 30%
+#                            -> every trade halts, in every sector
+#
+# The sizer would be manufacturing the outage. So the EFFECTIVE ceiling is the
+# tighter of the two: the sizer can never push a sector past the point where
+# the gate would halt the system. Both variables stay configurable, and a
+# mismatch is logged rather than silently reconciled.
+EFFECTIVE_SECTOR_PCT = min(_SIZER_SECTOR_PCT, _GATE_SECTOR_PCT)
+MAX_SECTOR_PCT = EFFECTIVE_SECTOR_PCT   # name kept for existing callers/tests
+
+if _SIZER_SECTOR_PCT > _GATE_SECTOR_PCT:
+    logging.getLogger(__name__).warning(
+        "Sector cap mismatch: MAX_SECTOR_PCT_OF_CAPITAL=%.1f%% is looser than "
+        "MAX_SECTOR_PCT=%.1f%%, which would let the sizer build a position "
+        "that halts the next cycle. Using the tighter %.1f%%. Set them equal "
+        "to silence this.",
+        _SIZER_SECTOR_PCT, _GATE_SECTOR_PCT, EFFECTIVE_SECTOR_PCT,
+    )
 MAX_WEEKLY_DRAWDOWN_PCT = float(os.getenv("MAX_WEEKLY_DRAWDOWN_PCT", 10))
 MAX_CONCURRENT_POSITIONS = int(os.getenv("MAX_CONCURRENT_POSITIONS", 5))
 MIN_POSITION_INR = float(os.getenv("MIN_POSITION_INR", 10_000))          # below this, not worth cost

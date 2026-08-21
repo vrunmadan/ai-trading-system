@@ -14,8 +14,15 @@ Circuit breakers (all configurable via .env):
                            default: -15000 (₹15k weekly loss cap)
   MAX_OPEN_POSITIONS     - halt if X or more positions are simultaneously open
                            default: 6
-  MAX_SECTOR_PCT         - halt if any single sector exceeds X% of deployed capital
+  MAX_SECTOR_PCT         - halt if any single sector exceeds X% of TOTAL capital
                            default: 30.0%
+                           NOTE: this is a portfolio circuit breaker. Breaching
+                           it halts the ENTIRE cycle, not just that sector.
+                           The Risk Sizer has a separate, per-trade sector
+                           ceiling (MAX_SECTOR_PCT_OF_CAPITAL). The sizer
+                           clamps itself to the tighter of the two so it can
+                           never build a position that trips this gate — see
+                           the note in risk_sizer/sizer.py.
 
 Portfolio value tracked conservatively as:
   TOTAL_CAPITAL_INR + sum(all realised P&L from closed trades)
