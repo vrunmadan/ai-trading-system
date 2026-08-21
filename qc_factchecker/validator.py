@@ -29,12 +29,27 @@ log = logging.getLogger(__name__)
 
 QC_MODEL = os.getenv("QC_MODEL", "gpt-5.5")
 
+# Sentinel so a missing verdict key is distinguishable from a real one.
+_MISSING = object()
+
 
 @dataclass
 class QCVerdict:
     verdict: str                            # "AGREE" | "DISAGREE" | "NEEDS_MORE_DATA"
     rationale: str                          # why this verdict
     disconfirming_evidence_considered: str  # logged for Auditor even on AGREE
+
+    # True when QC never produced a usable answer — API error, timeout, bad
+    # JSON, missing key, or a verdict string the model invented. False when
+    # the model genuinely reached a conclusion, INCLUDING a genuine
+    # NEEDS_MORE_DATA.
+    #
+    # Both cases block the trade, and that is correct. But they mean opposite
+    # things operationally: a genuine NEEDS_MORE_DATA is the QC working, while
+    # an errored one is the QC being unreachable. Collapsing them is what let
+    # an exhausted OpenAI quota silently block every signal while the daily
+    # summary reported a quiet market.
+    errored: bool = False
 
 
 SYSTEM_PROMPT = """You are an independent, skeptical adversarial reviewer for an AI equity
@@ -76,6 +91,10 @@ def validate_signal(signal) -> QCVerdict:
     Calls GPT-5.5 to adversarially review the Researcher's trade signal.
     Safe default on any failure: NEEDS_MORE_DATA (blocks the trade).
 
+    The returned verdict carries `errored`, which separates "QC considered
+    this and is not satisfied" from "QC could not be reached". Both block,
+    but only the second one means the system is degraded.
+
     Args:
         signal: TradeSignal dataclass from researcher/signal_generator.py
     """
@@ -88,6 +107,7 @@ def validate_signal(signal) -> QCVerdict:
             verdict="NEEDS_MORE_DATA",
             rationale="OPENAI_API_KEY missing — cannot run QC. Blocking trade.",
             disconfirming_evidence_considered="N/A — API key not configured",
+            errored=True,
         )
 
     client = OpenAI(api_key=api_key)
@@ -120,9 +140,20 @@ Find reasons this is wrong. Output your verdict as JSON."""
         raw = resp.choices[0].message.content.strip()
         data = json.loads(raw)
 
-        verdict = data.get("verdict", "NEEDS_MORE_DATA")
-        if verdict not in ("AGREE", "DISAGREE", "NEEDS_MORE_DATA"):
-            log.warning(f"QC returned unexpected verdict '{verdict}' — defaulting to NEEDS_MORE_DATA")
+        # Read with a sentinel rather than defaulting straight to a valid
+        # value: a response with no verdict key is a broken response, and
+        # defaulting it to NEEDS_MORE_DATA would disguise that as a considered
+        # verdict.
+        verdict = data.get("verdict", _MISSING)
+        # A verdict outside the allowed set means the model responded but did
+        # not answer the question. Treated as errored: it is a broken QC, not
+        # a considered "I need more data".
+        malformed = verdict not in ("AGREE", "DISAGREE", "NEEDS_MORE_DATA")
+        if malformed:
+            log.warning(
+                f"QC returned unexpected verdict {verdict!r} — treating as an "
+                f"error, not a verdict, and blocking the trade."
+            )
             verdict = "NEEDS_MORE_DATA"
 
         log.info(
@@ -136,6 +167,7 @@ Find reasons this is wrong. Output your verdict as JSON."""
             disconfirming_evidence_considered=data.get(
                 "disconfirming_evidence_considered", "None provided."
             ),
+            errored=malformed,
         )
 
     except json.JSONDecodeError as e:
@@ -144,6 +176,7 @@ Find reasons this is wrong. Output your verdict as JSON."""
             verdict="NEEDS_MORE_DATA",
             rationale=f"QC JSON parse error: {e} — blocking trade as safe default.",
             disconfirming_evidence_considered="N/A — parse error",
+            errored=True,
         )
     except Exception as e:
         log.error(f"QC API call failed: {e}")
@@ -151,4 +184,5 @@ Find reasons this is wrong. Output your verdict as JSON."""
             verdict="NEEDS_MORE_DATA",
             rationale=f"QC API error ({type(e).__name__}: {e}) — blocking trade.",
             disconfirming_evidence_considered="N/A — API error",
+            errored=True,
         )
