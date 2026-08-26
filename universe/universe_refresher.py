@@ -65,7 +65,11 @@ def run_universe_refresh(screener_client=None) -> dict:
                      If None, builds from env vars.
     """
     from universe.loader import load_universe
-    from universe.screener_client import build_client_from_env, DISCOVERY_QUERY as _DEFAULT_QUERY
+    # NOTE: the module-level DISCOVERY_QUERY (defined above from SCREENER_QUERY)
+    # is what this function uses. Do not re-import a query name from
+    # screener_client — it exports DEFAULT_DISCOVERY_QUERY, not DISCOVERY_QUERY,
+    # and the old import crashed the whole Sunday refresh with an ImportError.
+    from universe.screener_client import build_client_from_env
 
     if screener_client is None:
         screener_client = build_client_from_env()
