@@ -29,6 +29,15 @@ log = logging.getLogger(__name__)
 
 QC_MODEL = os.getenv("QC_MODEL", "gpt-5.5")
 
+# gpt-5.5 is a REASONING model: its internal reasoning tokens are drawn from
+# the SAME max_completion_tokens budget as the visible answer. If the budget is
+# too small the model spends it all reasoning and returns EMPTY content, which
+# then fails json.loads("") -> "Expecting value: line 1 column 1" and every
+# trade gets blocked as a false QC_ERROR. 450 was too tight for the real QC
+# prompt (the Researcher's Claude call learned the same lesson — see
+# signal_generator: "500 was too low"). Give reasoning + JSON ample room.
+QC_MAX_TOKENS = int(os.getenv("QC_MAX_COMPLETION_TOKENS", "3000"))
+
 # Sentinel so a missing verdict key is distinguishable from a real one.
 _MISSING = object()
 
@@ -130,16 +139,42 @@ Find reasons this is wrong. Output your verdict as JSON."""
     try:
         resp = client.chat.completions.create(
             model=QC_MODEL,
-            # gpt-5.5 rejects `max_tokens` (400 unsupported_parameter) and
-            # requires `max_completion_tokens`. Verified live against the model.
-            max_completion_tokens=450,
+            # gpt-5.5 rejects `max_tokens` (400) and requires
+            # `max_completion_tokens`, which must cover the reasoning tokens
+            # AND the JSON answer — hence the generous QC_MAX_TOKENS.
+            max_completion_tokens=QC_MAX_TOKENS,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
             ],
             response_format={"type": "json_object"},   # Structured Outputs
         )
-        raw = resp.choices[0].message.content.strip()
+
+        choice = resp.choices[0]
+        raw = (choice.message.content or "").strip()
+
+        # Empty content = the model produced no answer. On a reasoning model the
+        # usual cause is the token budget being exhausted by reasoning
+        # (finish_reason == "length"). Surface that precisely instead of letting
+        # it fall through as a generic JSON parse error — a blocked trade
+        # deserves an actionable reason, and this was a real production bug.
+        if not raw:
+            finish = getattr(choice, "finish_reason", "unknown")
+            used = getattr(getattr(resp, "usage", None), "completion_tokens", "?")
+            hint = (
+                f"empty QC response (finish_reason={finish}, "
+                f"completion_tokens={used}/{QC_MAX_TOKENS})"
+            )
+            if finish == "length":
+                hint += " — reasoning exhausted the budget; raise QC_MAX_COMPLETION_TOKENS"
+            log.error(f"QC returned no content: {hint}")
+            return QCVerdict(
+                verdict="NEEDS_MORE_DATA",
+                rationale=f"QC produced no answer: {hint}. Blocking trade as safe default.",
+                disconfirming_evidence_considered="N/A — empty response",
+                errored=True,
+            )
+
         data = json.loads(raw)
 
         # Read with a sentinel rather than defaulting straight to a valid
