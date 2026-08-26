@@ -237,30 +237,6 @@
 **Effort:** S
 **Priority:** P3
 
-### Double-approve guard permanently disables itself after a NOT_EXECUTED
-
-**What:** `get_trade_for_signal` must consult the most recent trade, not the oldest.
-
-**Why:** `ledger/db.py:281` does `SELECT * FROM trades WHERE signal_id=? ORDER BY id LIMIT 1` — the OLDEST row. The guard at `alerts/gmail_alert.py:359` then tests `fill_status != "NOT_EXECUTED"`. So the moment the reconciler writes off one trade for a signal, the guard consults that dead row forever and every further tap of the approve link writes another PENDING trade. Reproduced against a real ledger: one signal with one intended Rs 1,80,000 position became 3 open rows and Rs 5,40,000 of recorded exposure after three taps, and it is unbounded. Approval links never expire, so re-tapping an old email is ordinary behaviour rather than an attack. The phantom exposure then trips MAX_DEPLOYED_PCT, MAX_SECTOR_PCT and MAX_OPEN_POSITIONS on positions that do not exist, halting real trading because of imaginary risk.
-
-**Fix:** `ORDER BY id DESC LIMIT 1`, or better, query directly for a live trade: `WHERE signal_id=? AND fill_status != 'NOT_EXECUTED' AND exit_price IS NULL`. Add a test that approves, reconciles to NOT_EXECUTED, then approves again and asserts exposure does not grow.
-
-**Effort:** S
-**Priority:** P1
-
-### QC's refusal is not enforced at the approval boundary
-
-**What:** `handle_email_action` must check `signals.status` before building a basket.
-
-**Why:** `alerts/gmail_alert.py:311` selects `ticker, exchange, direction, sized_quantity, capital_to_deploy` and never reads `status`. Approval is gated on quantity alone, so any signal carrying a real quantity is approvable regardless of what the pipeline decided about it. Verified against a real ledger: QC_BLOCKED, QC_ERROR, REJECTED and NO_RESPONSE all returned APPROVED and created trade rows. QC_BLOCKED is the alarming one — QC adversarially reviewed that trade, returned DISAGREE, and the approval path will still open a pre-filled Kite basket for it. (DROPPED_* rows are protected incidentally, because they carry quantity 0 and the quantity guard catches them.)
-
-The QC gate is currently a property of one code path in `run_cycle`, not a property of the data. Exploiting it needs a valid HMAC, so this is defence-in-depth rather than a remote hole — but it is the money path and the fix is three lines.
-
-**Fix:** select `status`, and refuse anything not in an approvable state with an explanatory page naming the actual status.
-
-**Effort:** S
-**Priority:** P1
-
 ### DROPPED_* candidates are invisible to the weekly Auditor
 
 **What:** Add DROPPED_SIZER / DROPPED_NO_PRICE / DROPPED_SUBMIN to the auditor prompt's missed-opportunity vocabulary.
