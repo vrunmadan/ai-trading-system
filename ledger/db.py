@@ -275,10 +275,42 @@ def log_pending_trade(signal_id: int, ticker: str, exchange: str, direction: str
 
 
 def get_trade_for_signal(signal_id: int) -> dict | None:
-    """Returns the existing trade row for a signal, if any (double-approve guard)."""
+    """
+    The CURRENT trade row for a signal, if any.
+
+    Ordered newest-first. It previously ordered oldest-first, which meant any
+    caller asking "what happened to this signal" got the first attempt rather
+    than the live one.
+    """
     with get_db() as conn:
         row = conn.execute(
-            "SELECT * FROM trades WHERE signal_id=? ORDER BY id LIMIT 1",
+            "SELECT * FROM trades WHERE signal_id=? ORDER BY id DESC LIMIT 1",
+            (signal_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_live_trade_for_signal(signal_id: int) -> dict | None:
+    """
+    The trade that already acts on this signal, if one exists.
+
+    This is the double-approve guard's question, asked directly rather than
+    inferred from whichever row happened to sort first. NOT_EXECUTED rows are
+    excluded on purpose: the reconciler established that order never reached
+    the market, so it must not block a genuine retry. Everything else counts,
+    including a closed trade — one signal produces at most one position.
+
+    The bug this replaces: the guard fetched the OLDEST row and tested it for
+    NOT_EXECUTED. Once any attempt was written off, the guard consulted that
+    dead row forever, so every further tap of the (never-expiring) approve
+    link wrote another PENDING trade and inflated recorded exposure without
+    bound — until the portfolio circuit breakers halted trading over
+    positions that were never placed.
+    """
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM trades WHERE signal_id=? AND fill_status != 'NOT_EXECUTED' "
+            "ORDER BY id DESC LIMIT 1",
             (signal_id,),
         ).fetchone()
         return dict(row) if row else None

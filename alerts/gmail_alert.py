@@ -297,6 +297,35 @@ def _current_mode() -> str:
     return "PAPER" if os.getenv("PAPER_MODE", "true").lower() == "true" else "LIVE"
 
 
+# Statuses from which an approval may legitimately proceed.
+#
+#   PENDING       the normal case: alerted, awaiting your answer
+#   APPROVED      a re-tap of the same link; the live-trade guard below turns
+#                 this into "re-opening the same basket", not a second position
+#   NOT_EXECUTED  the reconciler established the order never reached the
+#                 market, so a deliberate retry is legitimate
+#
+# Everything else is a signal the pipeline already decided against, and
+# approving it would override that decision from outside. QC_BLOCKED is the
+# one that matters most: QC adversarially reviewed the trade and returned
+# DISAGREE. Until this check existed the QC gate was a property of one code
+# path in run_cycle rather than of the data, so any signal carrying a share
+# quantity could be approved regardless of what the pipeline concluded.
+_APPROVABLE_STATUSES = {"PENDING", "APPROVED", "NOT_EXECUTED"}
+
+_STATUS_REFUSAL = {
+    "QC_BLOCKED": "the QC fact-checker reviewed this trade and rejected it",
+    "QC_ERROR": "the QC fact-checker could not be reached, so this trade was never validated",
+    "REJECTED": "you rejected this signal",
+    "NO_RESPONSE": "this signal went unanswered and was swept at end of day",
+    "SKIPPED": "this signal was dropped before an alert was sent",
+    "EXECUTED": "this signal already has a confirmed fill",
+    "DROPPED_SIZER": "the Risk Sizer rejected this position",
+    "DROPPED_NO_PRICE": "no live price could be fetched, so it was never sized",
+    "DROPPED_SUBMIN": "the position came out below the minimum tradeable size",
+}
+
+
 def handle_email_action(action: str, signal_id: int):
     """
     Called by webhook_server.py when the user taps Approve or Reject.
@@ -311,7 +340,7 @@ def handle_email_action(action: str, signal_id: int):
     """
     from ledger.db import (
         get_db,
-        get_trade_for_signal,
+        get_live_trade_for_signal,
         log_pending_trade,
         update_signal_response,
     )
@@ -319,7 +348,8 @@ def handle_email_action(action: str, signal_id: int):
     if action == "approve":
         with get_db() as conn:
             row = conn.execute(
-                "SELECT ticker, exchange, direction, sized_quantity, capital_to_deploy "
+                "SELECT ticker, exchange, direction, sized_quantity, "
+                "capital_to_deploy, status "
                 "FROM signals WHERE id=?",
                 (signal_id,),
             ).fetchone()
@@ -331,6 +361,26 @@ def handle_email_action(action: str, signal_id: int):
         ticker   = row["ticker"]
         exchange = row["exchange"] if row["exchange"] else "NSE"
         direction = row["direction"]
+
+        # Enforce the pipeline's own verdict before anything else. Without
+        # this, approval was gated on quantity alone, so a signal QC had
+        # explicitly refused would still open a pre-filled Kite basket.
+        sig_status = (row["status"] or "").upper()
+        if sig_status not in _APPROVABLE_STATUSES:
+            reason = _STATUS_REFUSAL.get(
+                sig_status, f"this signal is in state {sig_status}"
+            )
+            log.warning(
+                f"Refusing to approve signal {signal_id}: status={sig_status!r} "
+                f"is not approvable."
+            )
+            return (
+                f"This signal cannot be approved because {reason} "
+                f"(status: {sig_status}). No Kite basket was opened and the "
+                f"signal was left unchanged.",
+                False,
+                None,
+            )
 
         # The quantity is computed in run_cycle Step 3b from the live LTP and
         # persisted with the signal. There is deliberately no fallback: a
@@ -355,8 +405,8 @@ def handle_email_action(action: str, signal_id: int):
         # Double-approve guard: a link is valid indefinitely, so a second tap
         # would otherwise write a second trade row and double the recorded
         # exposure for a single order.
-        existing = get_trade_for_signal(signal_id)
-        if existing and existing.get("fill_status") != "NOT_EXECUTED":
+        existing = get_live_trade_for_signal(signal_id)
+        if existing:
             log.info(
                 f"Signal #{signal_id} already has trade #{existing['id']} "
                 f"({existing.get('fill_status')}) — re-opening basket without "
