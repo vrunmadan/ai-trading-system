@@ -2,7 +2,23 @@
 
 **Purpose:** Complete, self-contained technical description of the system for an end-to-end review (code, control flow, decisions, thresholds, data model, and known risks). Written so a reviewer who has never seen the repo can follow every step from market-data ingestion to trade execution.
 
-**Status:** `PAPER_MODE=true` by default. Code complete; the strategy/exit/universe layer was recently redesigned from 10-year backtest evidence (see §11). Not yet validated out-of-sample by paper trading.
+**Status:** `PAPER_MODE=true` by default. The strategy/exit/universe layer was redesigned from 10-year backtest evidence (see §11). Not yet validated out-of-sample by paper trading.
+
+> ### CORRECTIONS (2026-08-21)
+> This document was written before a 12-commit run that changed the money path. Corrected claims are marked **[CORRECTED]** inline below. Subsystems added since, which are NOT yet described anywhere in this document:
+>
+> | Added | What it does |
+> |---|---|
+> | `monitor/trade_reconciler.py` | EOD job: promotes approved trades to CONFIRMED or NOT_EXECUTED against `kite.positions()`/`holdings()` |
+> | `monitor/provider_health.py` | Real-call reachability/quota probes for OpenAI, Anthropic, Google, feeding `/status` |
+> | `trades.fill_status` | PENDING / CONFIRMED / NOT_EXECUTED lifecycle, plus `exchange` and `fill_note` |
+> | `signals.status` vocabulary | APPROVED / EXECUTED / NOT_EXECUTED / QC_BLOCKED / QC_ERROR / DROPPED_* replace the old `MISSED` |
+> | `QCVerdict.errored` | Separates "QC refused" from "QC unreachable" |
+> | Pre-QC drop alerts | A 75%+ candidate dropped at the sizer/price/min-size step is now recorded and emailed |
+> | `DIAGNOSTIC_SECRET` | Split from `APPROVAL_SECRET`; diagnostic routes use `hmac.compare_digest` |
+> | QC parameter fix | gpt-5.5 requires `max_completion_tokens`; `max_tokens` returned 400 and blocked every trade |
+>
+> §13 has been updated to reflect what is fixed and what remains. Everything outside §13 and the marked corrections still describes the pre-change system in places — treat this document as authoritative for intent, and the code as authoritative for behaviour.
 
 **Instrument scope:** Indian equities, **long-only**, delivery (CNC). No shorting, no derivatives.
 
@@ -50,7 +66,9 @@ Three independent model families are used on purpose (Anthropic → OpenAI → G
                                               Approve ──► redirect to Kite basket ──► user places order
 ```
 
-**Key architectural fact for the reviewer:** the "Trader" module (`trader/kite_client.py`, with microstructure checks and `execute_trade`) exists but is **not currently invoked by the approval flow**. Approval marks the signal `APPROVED` and hands off to a manual Kite basket order. See §6 and §13 (Open Issue #1) — this is the most important wiring gap.
+**Key architectural fact for the reviewer:** the "Trader" module (`trader/kite_client.py`, with microstructure checks and `execute_trade`) exists but is **not invoked by the approval flow**. Approval still hands off to a manual Kite basket order — the system never places an order itself.
+
+**[CORRECTED 2026-08-21]** The consequence described here is no longer true. Approving now writes a PENDING row to `trades` (with the real share quantity, computed in `run_cycle` Step 3b from the live LTP), and an EOD reconciler promotes it to CONFIRMED or NOT_EXECUTED against Kite. The portfolio gate, Risk Sizer and Monitor therefore see real positions. What remains unreached is `execute_trade` itself, so the microstructure circuit breakers (ADV / circuit / liquidity) are still not applied to any order.
 
 ---
 
@@ -150,7 +168,7 @@ Fail-safe: if the gate itself raises, `run_cycle` returns (no trade).
 Deterministic math (NOT an LLM) so it's reproducible and auditable. Inputs fetched from Kite:
 - **Nifty 50 LTP vs its 200-day EMA** (% above/below) — structural trend, weight ≈3
 - **India VIX** level + 5-day change — fear/greed, weight ≈2.5
-- **Breadth**: % of up-to-20 sampled universe tickers above their 50-SMA, weight ≈2
+- **Breadth**: % of sampled universe tickers above their 50-SMA, weight ≈2. **[CORRECTED 2026-08-21]** The sample was `tickers[:20]` — the twenty largest names, since the CSV is cap-ordered — which inverts the meaning of breadth in a narrowing rally. It is now stratified across the whole universe with sector spreading (18 sectors, max 2 per sector, spanning positions 0–476 of 500).
 
 Thresholds:
 ```python
@@ -220,7 +238,7 @@ For each open position (`get_open_positions()`):
    - trailing stop = `peak × (1 − 20%)`, where `peak = max(entry, all logged check prices, today)` — reconstructed from the `price_at_check` column, **no schema change**.
    Early on the hard stop binds; once the trade runs up, the trailing stop takes over. (This exit was chosen by backtest: 20% trailing beat 7% trailing, time exits, and profit targets; a profit target *reduced* expectancy, so there is none — §12.)
 3. **Regime invalidation:** if entered in `bull`→ now `bear/crash`, `sideways`→`crash`, `euphoria`→`bear/crash`, the thesis is dead.
-4. Status = `INVALIDATED` (stop or regime) / `WEAKENING` (P&L ≤ −3%) / `INTACT`; logged to `position_checks`; email sent for INVALIDATED/WEAKENING. **The monitor alerts; it does not auto-close positions** (consistent with the manual-execution model).
+4. Status = `INVALIDATED` (stop or regime) / `WEAKENING` (P&L ≤ −3%) / `INTACT`; logged to `position_checks`; email sent for INVALIDATED/WEAKENING. **[CORRECTED 2026-08-21]** The monitor now calls `close_trade()` on INVALIDATED for **PAPER** rows with a CONFIRMED fill, which is what lets a paper round trip complete and gives the weekly Auditor an outcome to calibrate against. It exits at the observed 15:35 LTP, not at the stop price — filling at the stop line is the optimistic assumption the backtest makes. **LIVE positions still only alert**, consistent with the manual-execution model: closing the ledger row while the real Kite position is open would assert an exit that never happened.
 
 ---
 
@@ -287,7 +305,11 @@ This harness is how every strategy/exit/universe decision in §11 was made. It i
 
 ## 13. Known limitations, gaps & open risks (for the review)
 
-**Open Issue #1 — Execution↔ledger linkage (highest priority).** The approve flow redirects to a manual Kite basket and marks the signal `APPROVED`, but does **not** call `execute_trade` or create a `trades` row. Consequences: (a) the microstructure circuit breakers (ADV/circuit/liquidity) are **not applied to real orders**; (b) the Monitor and Portfolio Risk Gate see **no open positions** (deployed capital stays 0, stops never fire) because nothing is written to `trades`. Needs a fill-confirmation path (poll Kite orders/positions, or a broker callback) that writes the executed trade back to the ledger.
+**Open Issue #1 — Execution↔ledger linkage. [LARGELY FIXED 2026-08-21]** Approving now writes a PENDING `trades` row carrying the real share quantity, and `monitor/trade_reconciler.py` reconciles it at 15:35 against `kite.positions()` and `kite.holdings()`, promoting it to CONFIRMED (with the real average price) or NOT_EXECUTED. `get_open_positions()` counts PENDING and excludes NOT_EXECUTED, so same-day approvals see each other's capital and the circuit breakers read real state. `close_trade()` is called on INVALIDATED in PAPER mode, closing the loop.
+
+What remains: (a) `execute_trade` is still unreached, so the microstructure circuit breakers are not applied to any order; (b) LIVE exits are not reconciled — nothing detects that a real position disappeared, so a LIVE trade never closes itself; (c) reconciliation matches on ticker + exchange, so a name held outside the system could in principle be matched.
+
+**Newly found 2026-08-21, both P1:** the double-approve guard consults the OLDEST trade row (`ledger/db.py:281`), so after one NOT_EXECUTED it stops working and every further tap of the approve link inflates recorded exposure without bound; and `handle_email_action` never reads `signals.status`, so a signal QC explicitly refused (QC_BLOCKED), or one you rejected yourself, can still be approved. See TODOS.md.
 
 **Other items:**
 2. **Config drift:** `.env.example` references `GMAIL_APP_PASSWORD` but code uses Resend (§4).

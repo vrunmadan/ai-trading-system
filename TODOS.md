@@ -237,7 +237,94 @@
 **Effort:** S
 **Priority:** P3
 
+### Double-approve guard permanently disables itself after a NOT_EXECUTED
+
+**What:** `get_trade_for_signal` must consult the most recent trade, not the oldest.
+
+**Why:** `ledger/db.py:281` does `SELECT * FROM trades WHERE signal_id=? ORDER BY id LIMIT 1` — the OLDEST row. The guard at `alerts/gmail_alert.py:359` then tests `fill_status != "NOT_EXECUTED"`. So the moment the reconciler writes off one trade for a signal, the guard consults that dead row forever and every further tap of the approve link writes another PENDING trade. Reproduced against a real ledger: one signal with one intended Rs 1,80,000 position became 3 open rows and Rs 5,40,000 of recorded exposure after three taps, and it is unbounded. Approval links never expire, so re-tapping an old email is ordinary behaviour rather than an attack. The phantom exposure then trips MAX_DEPLOYED_PCT, MAX_SECTOR_PCT and MAX_OPEN_POSITIONS on positions that do not exist, halting real trading because of imaginary risk.
+
+**Fix:** `ORDER BY id DESC LIMIT 1`, or better, query directly for a live trade: `WHERE signal_id=? AND fill_status != 'NOT_EXECUTED' AND exit_price IS NULL`. Add a test that approves, reconciles to NOT_EXECUTED, then approves again and asserts exposure does not grow.
+
+**Effort:** S
+**Priority:** P1
+
+### QC's refusal is not enforced at the approval boundary
+
+**What:** `handle_email_action` must check `signals.status` before building a basket.
+
+**Why:** `alerts/gmail_alert.py:311` selects `ticker, exchange, direction, sized_quantity, capital_to_deploy` and never reads `status`. Approval is gated on quantity alone, so any signal carrying a real quantity is approvable regardless of what the pipeline decided about it. Verified against a real ledger: QC_BLOCKED, QC_ERROR, REJECTED and NO_RESPONSE all returned APPROVED and created trade rows. QC_BLOCKED is the alarming one — QC adversarially reviewed that trade, returned DISAGREE, and the approval path will still open a pre-filled Kite basket for it. (DROPPED_* rows are protected incidentally, because they carry quantity 0 and the quantity guard catches them.)
+
+The QC gate is currently a property of one code path in `run_cycle`, not a property of the data. Exploiting it needs a valid HMAC, so this is defence-in-depth rather than a remote hole — but it is the money path and the fix is three lines.
+
+**Fix:** select `status`, and refuse anything not in an approvable state with an explanatory page naming the actual status.
+
+**Effort:** S
+**Priority:** P1
+
+### DROPPED_* candidates are invisible to the weekly Auditor
+
+**What:** Add DROPPED_SIZER / DROPPED_NO_PRICE / DROPPED_SUBMIN to the auditor prompt's missed-opportunity vocabulary.
+
+**Why:** `auditor/weekly_audit.py:55` asks Gemini to review signals with status NO_RESPONSE, REJECTED, SKIPPED, NOT_EXECUTED, QC_BLOCKED or QC_ERROR. The three DROPPED_ statuses added in 7e92549 are absent, so the very candidates that commit was written to stop losing are the ones the weekly review will not count. This is the identical shape to the old `MISSED` bug: a status the writer produces that no reader ever asks for. Historically 10 TRADE-verdict candidates were lost this way, and the Auditor would see none of them.
+
+**Effort:** S
+**Priority:** P2
+
+### No test coverage on the pre-QC drop path
+
+**What:** Test `_drop_candidate_before_qc` and `send_candidate_dropped_alert`.
+
+**Why:** `grep -rl DROPPED_ tests/` returns nothing across 227 tests. Untested behaviour worth pinning: a DROPPED_ row is written for each of the three stages; the alert fires once per ticker+reason per day and not on the second drop; a failed `log_signal` does not suppress the alert; the daily summary counts DROPPED_ separately from both a quiet market and a QC block; DROPPED_NO_PRICE marks the day degraded. Every critical finding in both reviews has lived in untested code, and this is the newest such place.
+
+**Effort:** S
+**Priority:** P2
+
+### The exact drop reason is computed, stored, then not sent
+
+**What:** Put `sizing.notes` in the dropped-candidate email.
+
+**Why:** `send_candidate_dropped_alert` substitutes a generic blurb listing four possible causes ("sector cap full, max concurrent positions, weekly drawdown, or already holding this name"). The specific reason already exists on the object — `sizing.notes` reads e.g. "Sector cap hit: IT already has Rs 3,50,000 deployed (limit Rs 3,00,000)" — and is already persisted to the `sizer_notes` column. The trade alert renders it at `alerts/gmail_alert.py:219`, so this is an inconsistency as well as a loss of information the reader needs to decide whether the drop was correct.
+
+**Effort:** S
+**Priority:** P3
+
+### Kite token is checked for presence, never for validity (KNOWN)
+
+**What:** Probe the Kite token the way `provider_health` probes the LLM providers.
+
+**Why:** `webhook_server.py:297` sets `checks["kite_token"]["ok"] = bool(token)` — that a string exists in `kv_store`. The token expires at midnight IST every day by design, so each morning until the login email is tapped a stale string reports healthy, and because `kite_token` is in the `critical` list the whole `/status` reports "ok". Every stage depends on it: `researcher/regime_classifier.py:419`, `researcher/signal_generator.py:689`, `main.py:201`, `monitor/position_monitor.py:136`, `monitor/trade_reconciler.py:131`. This is the same bug class `monitor/provider_health.py` was built to fix for OpenAI, in the one credential that breaks daily, and Kite is the one dependency the probe set omits.
+
+`kv_store.updated_at` already records when the token was written, so staleness is knowable in a single comparison against today's IST date — `get_kite_token()` simply ignores the column.
+
+Logged as already-known at the 2026-08-21 review premise gate: the user is aware the token expires daily and considers the 07:30 login email the mitigation. Recorded here because the reported-healthy behaviour is a separate problem from the expiry itself, and because 7e92549 now surfaces the consequence (DROPPED_NO_PRICE) only at 15:35, after six hourly cycles have already lost their candidates.
+
+**Effort:** S
+**Priority:** P2
+
+### Architecture doc is 12 commits stale
+
+**What:** Correct the specific false claims in SYSTEM_ARCHITECTURE_REVIEW.md, or regenerate it.
+
+**Why:** Last touched at d1d1340, 12 commits ago. It still asserts that the Trader is "not currently invoked by the approval flow", that breadth uses "up-to-20 sampled universe tickers", and that "the monitor alerts; it does not auto-close" — all now false. Seven of the eight subsystems added since are absent from it entirely: trade_reconciler, provider_health, fill_status, QC_ERROR, the errored flag, max_completion_tokens, DROPPED_. It is the artifact you would hand someone to explain the system, and it currently describes a system that no longer exists.
+
+**Effort:** M
+**Priority:** P2
+
 ## Completed
+
+### Approval boundary guards — FIXED 2026-08-26
+
+**Was, 1:** `ledger/db.py:281` fetched the oldest trade row and the double-approve guard tested it for NOT_EXECUTED, so once any attempt was written off the guard consulted that dead row forever. Every further tap of the never-expiring approve link wrote another PENDING trade: one signal with one intended Rs 1,80,000 position reached Rs 5,40,000 of recorded exposure after three taps, unbounded. That phantom exposure trips MAX_DEPLOYED_PCT, MAX_SECTOR_PCT and MAX_OPEN_POSITIONS, halting real trading over positions that were never placed.
+
+**Was, 2:** `handle_email_action` never selected `signals.status`, so approval was gated on share quantity alone. QC_BLOCKED, QC_ERROR, REJECTED and NO_RESPONSE all returned APPROVED and created trade rows. The QC gate was a property of one code path in `run_cycle` rather than of the data.
+
+**Fix:** `get_live_trade_for_signal()` asks the guard's question directly rather than inferring it from sort order, excluding NOT_EXECUTED so a genuine retry still works exactly once. `get_trade_for_signal` now orders newest-first. Approval proceeds only from PENDING, APPROVED or NOT_EXECUTED; everything else is refused with a message naming the actual status and reason, leaving the signal untouched.
+
+**Tests:** `tests/test_approval_boundary.py`, 19 tests, including the exposure-inflation reproduction pinned as a regression. Full suite: 246 passed.
+
+**Note:** both were instances of the recurring pattern in this codebase — a guard enforced in one code path while the rows it produces are read elsewhere without re-checking. See also the DROPPED_/Auditor and get_kite_token entries above, which are the same shape and still open.
+
+
 
 ### Approval writes status EXECUTED for trades that were never executed — FIXED 2026-08-20
 
