@@ -63,6 +63,12 @@ class PortfolioRiskStatus:
     weekly_pnl: float           # this week's realised P&L (Mon–today)
     open_position_count: int
     sector_breaches: list[str] = field(default_factory=list)  # sectors > MAX_SECTOR_PCT
+    # Advisory breaches (exposure / position count / sector concentration).
+    # These NO LONGER halt the cycle — the research runs and the candidate still
+    # reaches the user as an alert, flagged. Only drawdown / weekly-loss halt.
+    # (User directive 2026-08-26: never suppress a signal on a trade limit; the
+    # decision to trade is the user's.)
+    advisory_flags: list[str] = field(default_factory=list)
 
 
 def check_portfolio_risk(
@@ -103,9 +109,17 @@ def check_portfolio_risk(
     ]
 
     # ----------------------------------------------------------------
-    # Circuit breakers — checked in order of severity
+    # Circuit breakers.
+    #
+    # HARD stops (drawdown, weekly loss) still halt the cycle: a bad losing
+    # streak is a genuine reason to stand down. Everything else — exposure,
+    # position count, sector concentration — is ADVISORY: it is attached to the
+    # alert as a warning but never suppresses the signal, because the decision
+    # to trade belongs to the user (directive 2026-08-26). Advisory breaches are
+    # collected in full (not first-match) so the user sees every flag.
     # ----------------------------------------------------------------
     halt_reason = ""
+    advisory_flags: list[str] = []
 
     if drawdown_pct <= -MAX_DRAWDOWN_PCT:
         halt_reason = (
@@ -118,21 +132,22 @@ def check_portfolio_risk(
             f"WEEKLY LOSS CIRCUIT BREAKER: week P&L is ₹{weekly_pnl:,.0f} "
             f"(limit: ₹{WEEKLY_LOSS_LIMIT:,.0f}). Halting for the rest of the week."
         )
-    elif deployed_pct >= MAX_DEPLOYED_PCT:
-        halt_reason = (
+
+    if deployed_pct >= MAX_DEPLOYED_PCT:
+        advisory_flags.append(
             f"EXPOSURE LIMIT: {deployed_pct:.1f}% of capital is deployed "
             f"(₹{deployed_capital:,.0f} / ₹{CAPITAL:,.0f}). "
-            f"Limit: {MAX_DEPLOYED_PCT}%. Wait for positions to close before adding."
+            f"Limit: {MAX_DEPLOYED_PCT}%."
         )
-    elif open_count >= MAX_OPEN_POSITIONS:
-        halt_reason = (
+    if open_count >= MAX_OPEN_POSITIONS:
+        advisory_flags.append(
             f"POSITION COUNT LIMIT: {open_count} open positions "
-            f"(limit: {MAX_OPEN_POSITIONS}). Wait for at least one to close."
+            f"(limit: {MAX_OPEN_POSITIONS})."
         )
-    elif sector_breaches:
-        halt_reason = (
+    if sector_breaches:
+        advisory_flags.append(
             f"SECTOR CONCENTRATION: {', '.join(sector_breaches)} exceed "
-            f"{MAX_SECTOR_PCT}% of capital. No new trades in those sectors."
+            f"{MAX_SECTOR_PCT}% of capital."
         )
 
     approved = not bool(halt_reason)
@@ -148,6 +163,7 @@ def check_portfolio_risk(
         weekly_pnl=weekly_pnl,
         open_position_count=open_count,
         sector_breaches=sector_breaches,
+        advisory_flags=advisory_flags,
     )
 
     if approved:
@@ -157,7 +173,15 @@ def check_portfolio_risk(
             f"deployed {deployed_pct:.1f}% | {open_count} positions | "
             f"week P&L ₹{weekly_pnl:,.0f}"
         )
+        if advisory_flags:
+            log.warning(
+                "Advisory risk flags (NOT halting — attached to alert): "
+                + " | ".join(advisory_flags)
+            )
     else:
+        # Only HARD circuit breakers (drawdown / weekly loss) reach here, so the
+        # halt email now fires only for a genuine losing-streak stop — not for
+        # exposure/sector/position advisories that used to email every cycle.
         log.warning(f"Portfolio risk gate: HALTED — {halt_reason}")
         _send_halt_alert(status)
 

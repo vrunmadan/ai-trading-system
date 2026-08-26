@@ -140,7 +140,7 @@ def send_plain_email(subject: str, body: str) -> bool:
     return _send_email(subject, html, plain_body=body)
 
 
-def send_trade_alert(signal_id: int, signal, qc_verdict, sizing) -> bool:
+def send_trade_alert(signal_id: int, signal, qc_verdict, sizing, risk_flags=None) -> bool:
     """
     Email the trade signal with Approve / Reject links.
 
@@ -148,12 +148,36 @@ def send_trade_alert(signal_id: int, signal, qc_verdict, sizing) -> bool:
       Tap "Approve → Open Kite" → our server redirects to Kite basket URL →
       Kite order screen opens pre-filled → user taps Place Order in Kite.
 
+    risk_flags: optional list of advisory risk warnings (exposure / sector /
+      position count / sizer limits). When present they are shown as an
+      advisory banner — the trade is NOT blocked, the decision is the user's.
+
     Returns True if sent successfully.
     """
     if not _configured():
         raise EnvironmentError(
             "RESEND_API_KEY and ALERT_EMAIL must be set in Railway env vars."
         )
+
+    risk_flags = risk_flags or []
+    if risk_flags:
+        _flag_items = "".join(f"<li style='margin:2px 0'>{f}</li>" for f in risk_flags)
+        risk_html = (
+            "<div style=\"background:#fff7ed;border:1px solid #fdba74;border-radius:8px;"
+            "padding:14px;margin-bottom:16px;font-size:13px\">"
+            "<strong>⚠ Risk flags (advisory — your call)</strong>"
+            "<div style='color:#9a3412;margin-top:4px'>These limits are informational. "
+            "The signal was NOT blocked; you decide whether to trade.</div>"
+            f"<ul style='margin:8px 0 0;padding-left:18px;color:#7c2d12'>{_flag_items}</ul>"
+            "</div>"
+        )
+        risk_plain = (
+            "\n⚠ RISK FLAGS (advisory — your call; the signal was NOT blocked):\n"
+            + "".join(f"  - {f}\n" for f in risk_flags)
+        )
+    else:
+        risk_html = ""
+        risk_plain = ""
 
     regime_emoji = {
         "extreme_fear_crash": "🔴", "bear": "🟠", "sideways": "🟡",
@@ -219,6 +243,8 @@ def send_trade_alert(signal_id: int, signal, qc_verdict, sizing) -> bool:
       <strong>Sizer notes:</strong> {sizing.notes[:200]}
     </div>
 
+    {risk_html}
+
     <!-- Primary action: Approve opens Kite basket via our webhook redirect -->
     <div style="text-align:center;margin-bottom:12px">
       <a href="{approve_url}"
@@ -254,7 +280,8 @@ def send_trade_alert(signal_id: int, signal, qc_verdict, sizing) -> bool:
         f"Quantity: {sizing.quantity} shares  |  Capital: ₹{sizing.capital_to_deploy:,.0f}\n"
         f"Confidence: {signal.confidence_score:.0f}%  |  Regime: {signal.regime.value}\n\n"
         f"Rationale: {signal.rationale[:400]}\n\n"
-        f"QC: {qc_verdict.verdict} — {qc_verdict.rationale[:300]}\n\n"
+        f"QC: {qc_verdict.verdict} — {qc_verdict.rationale[:300]}\n"
+        f"{risk_plain}\n"
         f"APPROVE (opens Kite): {approve_url}\n"
         f"REJECT:               {reject_url}\n\n"
         f"Direct Kite basket (fallback): {kite_basket_url}\n\n"

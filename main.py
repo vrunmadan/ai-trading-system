@@ -117,8 +117,15 @@ def run_cycle() -> None:
         ]
         weekly_pnl_early = get_weekly_pnl()
         portfolio_status = check_portfolio_risk(open_positions_for_risk, weekly_pnl_early)
+
+        # Advisory flags (exposure / sector / position count) never halt the
+        # cycle — they ride along on the alert so the user sees the context and
+        # decides. Only a HARD circuit breaker (drawdown / weekly loss) stops
+        # research. (User directive 2026-08-26: never suppress a signal on a
+        # trade limit.) The hard-halt email is sent inside check_portfolio_risk.
+        risk_flags: list[str] = list(getattr(portfolio_status, "advisory_flags", []) or [])
         if not portfolio_status.approved:
-            log.warning(f"Cycle halted by portfolio risk gate: {portfolio_status.halt_reason}")
+            log.warning(f"Cycle halted by HARD circuit breaker: {portfolio_status.halt_reason}")
             return
     except Exception as e:
         log.error(f"Portfolio risk check failed: {e}", exc_info=True)
@@ -183,9 +190,23 @@ def run_cycle() -> None:
         return
 
     if not sizing.approved:
-        log.info(f"Risk Sizer rejected: {sizing.notes}")
-        _drop_candidate_before_qc(signal, sizing, "DROPPED_SIZER")
-        return
+        # The sizer's weekly-drawdown check is a HARD stop (mirrors the
+        # portfolio circuit breaker). Everything else it rejects on — sector
+        # cap, position count, free capital, min size — is ADVISORY now: flag
+        # it, size it at the user's discretion, and let the candidate go all
+        # the way to the alert. The decision to trade is the user's.
+        if sizing.notes.startswith("Weekly drawdown"):
+            log.warning(f"Cycle halted by sizer HARD stop: {sizing.notes}")
+            return
+        log.info(f"Sizer advisory (NOT halting): {sizing.notes}")
+        from risk_sizer.sizer import suggested_capital
+
+        risk_flags.append(sizing.notes)
+        sizing.capital_to_deploy = suggested_capital(signal, capital)
+        sizing.notes = (
+            "ADVISORY — over a risk limit; sized at your discretion. "
+            + sizing.notes
+        )
 
     # ----------------------------------------------------------------
     # Step 3b: Convert the approved rupee amount into a share quantity
@@ -307,7 +328,7 @@ def run_cycle() -> None:
         return
 
     try:
-        sent = send_trade_alert(signal_id, signal, qc_verdict, sizing)
+        sent = send_trade_alert(signal_id, signal, qc_verdict, sizing, risk_flags=risk_flags)
         if sent:
             log.info(f"Alert sent for signal #{signal_id} ({signal.ticker})")
         else:

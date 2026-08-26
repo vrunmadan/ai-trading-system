@@ -79,12 +79,16 @@ class TestWeeklyLossCircuitBreaker:
 
 
 class TestDeployedCapitalCircuitBreaker:
-    def test_halts_when_deployed_pct_at_or_above_limit(self, monkeypatch):
+    def test_exposure_is_advisory_not_a_halt(self, monkeypatch):
+        # Exposure is now ADVISORY (user directive 2026-08-26): the cycle is NOT
+        # halted, but the breach is surfaced in advisory_flags so it reaches the
+        # user on the alert.
         mock_ledger(monkeypatch, all_time_pnl=0.0)
         open_positions = [_OpenPosition("A", "Tech", 650_000.0)]  # exactly 65%
         status = check_portfolio_risk(open_positions=open_positions, weekly_pnl=0.0)
-        assert status.approved is False
-        assert "EXPOSURE" in status.halt_reason
+        assert status.approved is True
+        assert status.halt_reason == ""
+        assert any("EXPOSURE" in f for f in status.advisory_flags)
 
     def test_allows_below_deployed_limit(self, monkeypatch):
         mock_ledger(monkeypatch, all_time_pnl=0.0)
@@ -100,12 +104,13 @@ class TestDeployedCapitalCircuitBreaker:
 
 
 class TestPositionCountCircuitBreaker:
-    def test_halts_at_max_open_positions(self, monkeypatch):
+    def test_position_count_is_advisory_not_a_halt(self, monkeypatch):
+        # Position-count limit is advisory now: flagged, not halted.
         mock_ledger(monkeypatch, all_time_pnl=0.0)
         open_positions = [_OpenPosition(f"S{i}", "Tech", 10_000.0) for i in range(6)]
         status = check_portfolio_risk(open_positions=open_positions, weekly_pnl=0.0)
-        assert status.approved is False
-        assert "POSITION COUNT" in status.halt_reason
+        assert status.approved is True
+        assert any("POSITION COUNT" in f for f in status.advisory_flags)
 
     def test_allows_below_max_open_positions(self, monkeypatch):
         mock_ledger(monkeypatch, all_time_pnl=0.0)
@@ -115,13 +120,14 @@ class TestPositionCountCircuitBreaker:
 
 
 class TestSectorConcentrationCircuitBreaker:
-    def test_halts_when_a_sector_exceeds_cap(self, monkeypatch):
+    def test_sector_concentration_is_advisory_not_a_halt(self, monkeypatch):
+        # Sector concentration is advisory now: flagged, not halted.
         mock_ledger(monkeypatch, all_time_pnl=0.0)
         open_positions = [_OpenPosition("A", "Energy", 310_000.0)]  # 31% > 30% cap
         status = check_portfolio_risk(open_positions=open_positions, weekly_pnl=0.0)
-        assert status.approved is False
-        assert "SECTOR CONCENTRATION" in status.halt_reason
-        assert "Energy" in status.halt_reason
+        assert status.approved is True
+        assert any("SECTOR CONCENTRATION" in f for f in status.advisory_flags)
+        assert any("Energy" in f for f in status.advisory_flags)
 
     def test_allows_multi_sector_below_cap(self, monkeypatch):
         mock_ledger(monkeypatch, all_time_pnl=0.0)

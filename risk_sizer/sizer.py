@@ -193,3 +193,19 @@ def size_position(
             f"₹{sector_deployed + capital_to_deploy:,.0f} / ₹{sector_cap:,.0f} cap."
         ),
     )
+
+
+def suggested_capital(signal, capital: float = TOTAL_CAPITAL) -> float:
+    """Advisory position size, ignoring portfolio caps.
+
+    Used by run_cycle when a candidate trips an ADVISORY limit (sector /
+    position count / free capital / min size) rather than a hard stop: the
+    trade still goes to the user as an alert, so it needs a sensible number to
+    show and to pre-fill the Kite basket. This is the same confidence-scaled
+    base the sizer would use with an empty book — deliberately NOT clamped by
+    the advisory cap the user has chosen to override.
+    """
+    base = capital * (MAX_POSITION_PCT / 100)
+    conf = max(70.0, min(100.0, signal.confidence_score))
+    scale = (conf - 70) / 30 * 0.40 + 0.60  # 70→0.60, 100→1.00
+    return round(base * scale, 2)
