@@ -39,6 +39,12 @@ PAPER_MODE = os.getenv("PAPER_MODE", "true").lower() == "true"
 # the extra "QC has been down for N cycles" mail.
 QC_ERROR_ALERT_THRESHOLD = int(os.getenv("QC_ERROR_ALERT_THRESHOLD", "3"))
 
+# Hard floor on regime confidence below which the cycle skips entirely.
+# Default 0 = never skip on regime confidence: a low-confidence read is treated
+# as advisory (flagged on the alert) so signals are never suppressed. Set this
+# above 0 only if you deliberately want to stand down in murky markets.
+MIN_REGIME_CONFIDENCE = float(os.getenv("MIN_REGIME_CONFIDENCE", "0"))
+
 
 def _drop_candidate_before_qc(signal, sizing, status: str) -> None:
     """A candidate cleared the 75% bar but was dropped BEFORE QC — at the Risk
@@ -141,12 +147,25 @@ def run_cycle() -> None:
         log.error(f"Regime classification failed: {e}", exc_info=True)
         return
 
-    if regime_reading.confidence < 60:
+    # Regime confidence is ADVISORY, not a gate (user directive 2026-08-26:
+    # never suppress a signal). A mixed/low-confidence read no longer skips the
+    # cycle — the research runs and any candidate reaches the user, flagged with
+    # the regime uncertainty so they can weigh it. A floor can be restored by
+    # setting MIN_REGIME_CONFIDENCE > 0 (default 0 = never skip on this).
+    if regime_reading.confidence < MIN_REGIME_CONFIDENCE:
         log.info(
-            f"Low regime confidence ({regime_reading.confidence:.0f}%) — cycle skipped. "
-            f"({regime_reading.rationale[:120]})"
+            f"Regime confidence {regime_reading.confidence:.0f}% below hard floor "
+            f"{MIN_REGIME_CONFIDENCE:.0f}% — cycle skipped. ({regime_reading.rationale[:120]})"
         )
         return
+
+    if regime_reading.confidence < 60:
+        flag = (
+            f"Low regime confidence ({regime_reading.confidence:.0f}%): the "
+            f"{regime_reading.regime.value} read is mixed — signal shown anyway, your call."
+        )
+        log.info(f"Regime advisory (NOT skipping): {flag}")
+        risk_flags.append(flag)
 
     log.info(
         f"Regime: {regime_reading.regime.value.upper()} | "
