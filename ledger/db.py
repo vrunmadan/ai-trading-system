@@ -132,7 +132,18 @@ def log_signal(signal, sizing, qc_verdict=None, status: str = "PENDING") -> int:
                 status,
             ),
         )
-        return cur.lastrowid
+        signal_id = cur.lastrowid
+
+    # Mirror EVERY signal — whatever its status (PENDING, QC_BLOCKED, QC_ERROR,
+    # DROPPED_*, ...) — to the Google Sheets "Signals" tab, so the sheet reflects
+    # each situation as it happens, not only the ones that alerted. Non-blocking.
+    try:
+        from sheets.trade_logger import append_signal
+        append_signal(signal_id, signal, sizing, qc_verdict, status)
+    except Exception:
+        pass
+
+    return signal_id
 
 
 def update_signal_alert_sent(signal_id: int):
@@ -260,6 +271,13 @@ def log_trade(signal_id: int, ticker: str, direction: str,
         from sheets.trade_logger import append_trade
         append_trade(trade_id, signal_id, ticker, direction, quantity,
                      entry_price, entry_time, mode)
+    except Exception:
+        pass
+
+    # Keep the "Positions" tab current — a new open position just changed it.
+    try:
+        from sheets.trade_logger import refresh_positions
+        refresh_positions(get_open_positions())
     except Exception:
         pass
 
@@ -392,6 +410,13 @@ def close_trade(trade_id: int, exit_price: float):
     try:
         from sheets.trade_logger import close_trade_row
         close_trade_row(trade_id, exit_price, exit_time, pnl)
+    except Exception:
+        pass
+
+    # The exit removed a position — refresh the "Positions" tab snapshot.
+    try:
+        from sheets.trade_logger import refresh_positions
+        refresh_positions(get_open_positions())
     except Exception:
         pass
 

@@ -355,13 +355,10 @@ def run_cycle() -> None:
     except Exception as e:
         log.error(f"Gmail send failed: {e}", exc_info=True)
 
-    # Mirror to Google Sheets (non-blocking — failure never stops the cycle)
-    try:
-        from sheets.trade_logger import append_signal, refresh_positions
-        append_signal(signal_id, signal, sizing, qc_verdict)
-        refresh_positions(raw_positions)  # raw_positions from Step 0
-    except Exception as e:
-        log.warning(f"Sheets logging failed (non-critical): {e}")
+    # Google Sheets mirroring is now handled at the ledger choke points:
+    # log_signal() mirrors every signal (any status) to the Signals tab, and
+    # log_trade()/close_trade() mirror trades + refresh the Positions tab. No
+    # per-cycle call here — that would double-log the alerted signal.
 
 
 # ---------------------------------------------------------------------------

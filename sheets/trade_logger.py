@@ -49,6 +49,15 @@ SPREADSHEET_ID       = os.getenv("SHEETS_SPREADSHEET_ID", "")
 _OAUTH_CLIENT_B64    = os.getenv("SHEETS_OAUTH_CLIENT_B64", "")
 _AUTHORIZED_USER_B64 = os.getenv("SHEETS_AUTHORIZED_USER_B64", "")
 
+# Preferred for a server app: a Google SERVICE ACCOUNT. Unlike OAuth "authorized
+# user" tokens (which expire — weekly if the consent screen is in Testing mode,
+# the invalid_grant we hit), a service account never expires and needs no
+# browser re-auth. Set SHEETS_SERVICE_ACCOUNT_B64 (base64 of the downloaded JSON
+# key) or SHEETS_SERVICE_ACCOUNT_JSON (raw JSON) in Railway, and share the sheet
+# with the service account's client_email. When present it takes priority.
+_SERVICE_ACCOUNT_B64  = os.getenv("SHEETS_SERVICE_ACCOUNT_B64", "")
+_SERVICE_ACCOUNT_JSON = os.getenv("SHEETS_SERVICE_ACCOUNT_JSON", "")
+
 # Temp paths used when running on Railway (overrides file-based paths above)
 _TMP_OAUTH_CLIENT    = os.path.join(tempfile.gettempdir(), "sheets_oauth_client.json")
 _TMP_AUTHORIZED_USER = os.path.join(tempfile.gettempdir(), "sheets_authorized_user.json")
@@ -83,6 +92,27 @@ def _resolve_cred_paths() -> tuple[str, str]:
     if os.path.exists(AUTHORIZED_USER_PATH):
         return OAUTH_CLIENT_PATH, AUTHORIZED_USER_PATH
     return _TMP_OAUTH_CLIENT, _TMP_AUTHORIZED_USER
+
+
+def _service_account_info() -> Optional[dict]:
+    """Service-account key parsed from env (B64 or raw JSON), or None if unset."""
+    import json
+    raw = ""
+    if _SERVICE_ACCOUNT_B64:
+        try:
+            raw = base64.b64decode(_SERVICE_ACCOUNT_B64).decode("utf-8")
+        except Exception as e:
+            log.error(f"Could not base64-decode SHEETS_SERVICE_ACCOUNT_B64: {e}")
+            return None
+    elif _SERVICE_ACCOUNT_JSON:
+        raw = _SERVICE_ACCOUNT_JSON
+    if not raw.strip():
+        return None
+    try:
+        return json.loads(raw)
+    except Exception as e:
+        log.error(f"SHEETS_SERVICE_ACCOUNT_* is not valid JSON: {e}")
+        return None
 
 TAB_TRADES    = "Trades"
 TAB_SIGNALS   = "Signals"
@@ -123,26 +153,36 @@ def _configured() -> bool:
             "Google Sheets not configured — set SHEETS_SPREADSHEET_ID in .env to enable trade logging."
         )
         return False
+    # A service account is self-sufficient — no OAuth files needed.
+    if _service_account_info() is not None:
+        return True
     if not _write_credentials_from_env():
         log.warning(
-            "Sheets credentials not found. Either run `python setup/authorize_sheets.py` locally "
-            "or set SHEETS_OAUTH_CLIENT_B64 and SHEETS_AUTHORIZED_USER_B64 in Railway env vars."
+            "Sheets credentials not found. Set SHEETS_SERVICE_ACCOUNT_B64 (recommended — "
+            "no expiry), or run `python setup/authorize_sheets.py` locally, or set "
+            "SHEETS_OAUTH_CLIENT_B64 and SHEETS_AUTHORIZED_USER_B64 in Railway env vars."
         )
         return False
     return True
 
 
 def _get_client():
-    """Return an authenticated gspread client using OAuth2, or None on failure."""
+    """Return an authenticated gspread client, or None on failure.
+
+    Prefers a service account (no token expiry); falls back to OAuth files.
+    """
     try:
         import gspread
+        info = _service_account_info()
+        if info is not None:
+            return gspread.service_account_from_dict(info)
         oauth_path, auth_path = _resolve_cred_paths()
         return gspread.oauth(
             credentials_filename=oauth_path,
             authorized_user_filename=auth_path,
         )
     except Exception as e:
-        log.error(f"gspread OAuth auth failed: {e}")
+        log.error(f"gspread auth failed: {e}")
         return None
 
 
@@ -205,6 +245,7 @@ def append_signal(
     signal,           # TradeSignal from signal_generator
     sizing,           # SizingResult from risk_sizer
     qc_verdict,       # QCVerdict from qc_factchecker (or None)
+    status: str = "PENDING",   # real ledger status (QC_BLOCKED, QC_ERROR, DROPPED_*, ...)
 ) -> None:
     """Append one row to the Signals tab for a newly generated signal."""
     if not _configured():
@@ -232,7 +273,7 @@ def append_signal(
             round(signal.confidence_score, 1),
             qc_verdict.verdict if qc_verdict else "N/A",
             sizing.quantity if sizing else 0,
-            "PENDING",
+            status,
             signal.rationale[:300],
         ]
         ws.append_row(row, value_input_option="USER_ENTERED")
