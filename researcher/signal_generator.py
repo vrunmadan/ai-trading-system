@@ -881,25 +881,42 @@ def generate_signal(regime_reading: RegimeReading) -> Optional[TradeSignal]:
             )
 
             if confidence > best_confidence:
-                best_confidence = confidence
-                best_signal = TradeSignal(
-                    ticker=ticker,
-                    sector=sector_map.get(ticker, "Unknown"),
-                    exchange=resolved_exchange,
-                    regime=regime,
-                    strategy_bucket=strategy["name"],
-                    direction="BUY",
-                    technical_score=tech_score,
-                    fundamental_score=fund_score,
-                    confidence_score=confidence,
-                    rationale=(
-                        f"{rationale} "
-                        f"[tech {indicators['rsi_14']} RSI | "
-                        f"{indicators['supertrend_10_3']} ST | "
-                        f"{indicators['volume_ratio_20d']:.1f}x vol | "
-                        f"{indicators['pct_from_52wk_high']:+.0f}% 52wkH]"
-                    ),
-                )
+                # Build defensively. A missing/None indicator here used to raise
+                # (e.g. formatting None with :.1f / :+.0f), which crashed the
+                # WHOLE cycle's generate_signal after this TRADE was already
+                # logged to cycle_log — so the candidate showed as TRADE in the
+                # summary but never became a signal or an alert. Never again:
+                # a single ticker's data quirk must not lose a found candidate.
+                _vr = indicators.get("volume_ratio_20d")
+                _pc = indicators.get("pct_from_52wk_high")
+                _vr_s = ("%.1f" % _vr) if isinstance(_vr, (int, float)) else "n/a"
+                _pc_s = ("%+.0f" % _pc) if isinstance(_pc, (int, float)) else "n/a"
+                try:
+                    _sig = TradeSignal(
+                        ticker=ticker,
+                        sector=sector_map.get(ticker, "Unknown"),
+                        exchange=resolved_exchange,
+                        regime=regime,
+                        strategy_bucket=strategy["name"],
+                        direction="BUY",
+                        technical_score=tech_score,
+                        fundamental_score=fund_score,
+                        confidence_score=confidence,
+                        rationale=(
+                            f"{rationale} "
+                            f"[tech {indicators.get('rsi_14')} RSI | "
+                            f"{indicators.get('supertrend_10_3')} ST | "
+                            f"{_vr_s}x vol | {_pc_s}% 52wkH]"
+                        ),
+                    )
+                    best_signal = _sig
+                    best_confidence = confidence
+                except Exception as e:
+                    log.error(
+                        f"Failed to build TradeSignal for {ticker}/{strategy['name']} "
+                        f"(scan continues, prior best_signal preserved): {e}",
+                        exc_info=True,
+                    )
 
     if best_signal:
         log.info(

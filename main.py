@@ -178,7 +178,21 @@ def run_cycle() -> None:
     try:
         signal = generate_signal(regime_reading)
     except Exception as e:
-        log.error(f"Signal generation failed: {e}", exc_info=True)
+        log.error(f"Signal generation crashed: {e}", exc_info=True)
+        # Never silent: a wholesale crash means candidates may have been found
+        # mid-scan and lost. Tell the user — this is a fault, not a quiet market.
+        try:
+            import traceback as _tb
+            from alerts.gmail_alert import send_plain_email
+            send_plain_email(
+                subject="🚨 Signal generation crashed — cycle aborted",
+                body=("The research scan raised an exception and the cycle was "
+                      "aborted. Any candidate found before the crash was lost. "
+                      "This is a system fault, not a quiet market.\n\n"
+                      + _tb.format_exc()[:1500]),
+            )
+        except Exception as _e:
+            log.error(f"Could not send signal-crash alert: {_e}")
         return
 
     if signal is None:
