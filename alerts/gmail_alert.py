@@ -44,6 +44,15 @@ ALERT_EMAIL     = os.getenv("ALERT_EMAIL", "")
 RAILWAY_URL     = os.getenv("RAILWAY_URL", "http://localhost:8080").rstrip("/")
 APPROVAL_SECRET = os.getenv("APPROVAL_SECRET", "")
 
+# Secret embedded in diagnostic links (/status, /cycle_history) so those links
+# actually work when clicked from an email. The old templates hard-coded the
+# literal placeholder "<APPROVAL_SECRET>", which email clients render as an
+# (invisible) HTML tag — the user just saw "secret=" and got a 403.
+# Prefer a DEDICATED DIAGNOSTIC_SECRET so the HMAC signing key never travels in
+# email; fall back to APPROVAL_SECRET so the link still works out of the box.
+from urllib.parse import quote as _urlquote
+DIAGNOSTIC_SECRET = os.getenv("DIAGNOSTIC_SECRET", "") or APPROVAL_SECRET
+
 # Resend HTTP API — works on Railway (port 443). No SMTP needed.
 # Sign up free at resend.com, copy your API key, set RESEND_API_KEY in Railway.
 RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
@@ -664,7 +673,7 @@ def send_qc_down_alert(streak: int) -> bool:
             "  - QC_MODEL name not available to the account\n"
             "  - OpenAI API outage\n\n"
             "Check provider health:\n"
-            f"  {RAILWAY_URL}/status?secret=<APPROVAL_SECRET>\n\n"
+            f"  {RAILWAY_URL}/status?secret={_urlquote(DIAGNOSTIC_SECRET)}\n\n"
             "This alert is sent once per outage. You will keep receiving a "
             "per-signal alert for each trade that gets blocked."
         ),
@@ -871,7 +880,7 @@ def send_daily_cycle_summary() -> None:
         f"{signal_block}"
         f"{top_block}\n\n"
         f"Full detail:\n"
-        f"  {RAILWAY_URL}/cycle_history?secret=<APPROVAL_SECRET>&days=1\n"
+        f"  {RAILWAY_URL}/cycle_history?secret={_urlquote(DIAGNOSTIC_SECRET)}&days=1\n"
     )
 
     send_plain_email(

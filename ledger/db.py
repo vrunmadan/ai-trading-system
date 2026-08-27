@@ -241,6 +241,7 @@ def log_trade(signal_id: int, ticker: str, direction: str,
     knows the fill happened. The approve path uses log_pending_trade instead.
     """
     with get_db() as conn:
+        entry_time = now_ist()
         cur = conn.execute(
             """
             INSERT INTO trades (signal_id, ticker, direction, quantity,
@@ -248,10 +249,21 @@ def log_trade(signal_id: int, ticker: str, direction: str,
                                 fill_status, fill_note)
             VALUES (?,?,?,?,?,?,?,?,?,?)
             """,
-            (signal_id, ticker, direction, quantity, entry_price, now_ist(),
+            (signal_id, ticker, direction, quantity, entry_price, entry_time,
              mode, exchange, fill_status, fill_note),
         )
-        return cur.lastrowid
+        trade_id = cur.lastrowid
+
+    # Mirror every opened trade (buy) to the Google Sheets "Trades" tab.
+    # Best-effort and non-blocking — append_trade handles/logs its own errors.
+    try:
+        from sheets.trade_logger import append_trade
+        append_trade(trade_id, signal_id, ticker, direction, quantity,
+                     entry_price, entry_time, mode)
+    except Exception:
+        pass
+
+    return trade_id
 
 
 def log_pending_trade(signal_id: int, ticker: str, exchange: str, direction: str,
@@ -368,10 +380,20 @@ def close_trade(trade_id: int, exit_price: float):
             raise ValueError(f"Trade {trade_id} not found")
         qty, entry = row["quantity"], row["entry_price"]
         pnl = (exit_price - entry) * qty if row["direction"] == "BUY" else (entry - exit_price) * qty
+        pnl = round(pnl, 2)
+        exit_time = now_ist()
         conn.execute(
             "UPDATE trades SET exit_price=?, exit_time=?, pnl=? WHERE id=?",
-            (exit_price, now_ist(), round(pnl, 2), trade_id),
+            (exit_price, exit_time, pnl, trade_id),
         )
+
+    # Mirror the exit (sell) to the Google Sheets "Trades" tab — fills in the
+    # exit price / time / P&L on the row opened by append_trade. Non-blocking.
+    try:
+        from sheets.trade_logger import close_trade_row
+        close_trade_row(trade_id, exit_price, exit_time, pnl)
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
