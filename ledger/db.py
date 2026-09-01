@@ -33,6 +33,7 @@ def init_db():
             # confirmed. New PENDING rows are written explicitly by the approve path.
             "ALTER TABLE trades ADD COLUMN fill_status TEXT NOT NULL DEFAULT 'CONFIRMED'",
             "ALTER TABLE trades ADD COLUMN fill_note TEXT",
+            "ALTER TABLE signals ADD COLUMN price_at_signal REAL",
         ]:
             try:
                 conn.execute(migration)
@@ -94,7 +95,10 @@ def now_ist() -> str:
 # Signal logging
 # ---------------------------------------------------------------------------
 
-def log_signal(signal, sizing, qc_verdict=None, status: str = "PENDING") -> int:
+def log_signal(
+    signal, sizing, qc_verdict=None, status: str = "PENDING",
+    price_at_signal: float | None = None,
+) -> int:
     """
     Insert a signal record and return its row ID.
 
@@ -102,6 +106,13 @@ def log_signal(signal, sizing, qc_verdict=None, status: str = "PENDING") -> int:
     at the QC gate are logged too, with QC_BLOCKED or QC_ERROR, so a blocked
     candidate leaves a trace instead of vanishing — the daily summary counts
     them and the weekly Auditor can review them as missed opportunities.
+
+    price_at_signal: the live LTP at the moment this signal was evaluated,
+    when known (main.py fetches it for sizing before QC ever runs, so it's
+    available regardless of what QC or the sizer decide). Without this,
+    a QC_BLOCKED/QC_ERROR signal had no recorded price and there was no way
+    to later check whether blocking it was actually right — see
+    get_signals_needing_shadow_check() / record_shadow_check().
     """
     with get_db() as conn:
         cur = conn.execute(
@@ -110,8 +121,9 @@ def log_signal(signal, sizing, qc_verdict=None, status: str = "PENDING") -> int:
                 created_at, ticker, exchange, regime, strategy_bucket, direction,
                 technical_score, fundamental_score, confidence_score,
                 researcher_rationale, qc_verdict, qc_rationale,
-                sized_quantity, capital_to_deploy, sizer_notes, status
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                sized_quantity, capital_to_deploy, sizer_notes, status,
+                price_at_signal
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 now_ist(),
@@ -130,6 +142,7 @@ def log_signal(signal, sizing, qc_verdict=None, status: str = "PENDING") -> int:
                 sizing.capital_to_deploy,
                 sizing.notes,
                 status,
+                price_at_signal,
             ),
         )
         signal_id = cur.lastrowid
@@ -670,6 +683,76 @@ def get_signal_log(days: int = 7) -> list[dict]:
             ORDER BY created_at DESC
             """,
             (cutoff,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Shadow price checks — grading QC_BLOCKED / QC_ERROR signals against what
+# actually happened, without ever placing an order.
+# ---------------------------------------------------------------------------
+
+def get_signals_needing_shadow_check(horizon_days: int, max_age_days: int = 14) -> list[dict]:
+    """
+    QC_BLOCKED / QC_ERROR signals old enough for a `horizon_days` shadow
+    check that haven't had one recorded yet.
+
+    Bounded by max_age_days so a gap in the scheduler (deploy downtime, a
+    paused service) doesn't cause a months-old signal to suddenly get
+    checked against today's price as if that were N days out — a stale
+    comparison is worse than no comparison.
+    """
+    now = datetime.now(IST)
+    due_before = (now - timedelta(days=horizon_days)).strftime("%Y-%m-%d %H:%M:%S")
+    too_old_before = (now - timedelta(days=max_age_days)).strftime("%Y-%m-%d %H:%M:%S")
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT s.* FROM signals s
+            WHERE s.status IN ('QC_BLOCKED', 'QC_ERROR')
+              AND s.price_at_signal IS NOT NULL
+              AND s.created_at <= ?
+              AND s.created_at >= ?
+              AND NOT EXISTS (
+                  SELECT 1 FROM signal_shadow_checks c
+                  WHERE c.signal_id = s.id AND c.horizon_days = ?
+              )
+            """,
+            (due_before, too_old_before, horizon_days),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def record_shadow_check(
+    signal_id: int, horizon_days: int, price_at_check: float,
+    return_pct: float, notes: str | None = None,
+) -> None:
+    """Record one horizon's shadow-check result. Safe to call once per
+    (signal_id, horizon_days) — later calls for the same pair are no-ops."""
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO signal_shadow_checks (
+                signal_id, horizon_days, checked_at, price_at_check, return_pct, notes
+            ) VALUES (?,?,?,?,?,?)
+            """,
+            (signal_id, horizon_days, now_ist(), price_at_check, return_pct, notes),
+        )
+
+
+def get_shadow_checks_for_signal_ids(signal_ids: list[int]) -> list[dict]:
+    """All recorded shadow checks for a set of signal IDs, oldest horizon first."""
+    if not signal_ids:
+        return []
+    with get_db() as conn:
+        placeholders = ",".join("?" * len(signal_ids))
+        rows = conn.execute(
+            f"""
+            SELECT * FROM signal_shadow_checks
+            WHERE signal_id IN ({placeholders})
+            ORDER BY signal_id, horizon_days
+            """,
+            signal_ids,
         ).fetchall()
         return [dict(r) for r in rows]
 

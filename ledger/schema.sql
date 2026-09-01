@@ -16,6 +16,10 @@ CREATE TABLE IF NOT EXISTS signals (
     researcher_rationale TEXT,
     qc_verdict TEXT,                   -- AGREE / DISAGREE / NEEDS_MORE_DATA
     qc_rationale TEXT,
+    price_at_signal REAL,              -- LTP at evaluation time, whatever the outcome.
+                                        -- Without this a QC_BLOCKED/QC_ERROR signal has
+                                        -- no baseline price and can never be graded —
+                                        -- see signal_shadow_checks below.
     sized_quantity INTEGER,
     capital_to_deploy REAL,             -- INR approved by Risk Sizer (stored so Trader can reuse it)
     sizer_notes TEXT,
@@ -87,6 +91,23 @@ CREATE TABLE IF NOT EXISTS cycle_log (
     bollinger_position REAL,
     above_sma50 INTEGER,                -- 1/0
     rationale TEXT                      -- Claude's rationale (or error message)
+);
+
+-- Shadow price checks — the only way to know whether a QC_BLOCKED / QC_ERROR
+-- signal was actually a missed opportunity or a correctly-avoided loser.
+-- Paper-only, no order ever placed: just "what would this position be worth
+-- N days later" using price_at_signal as the hypothetical entry. Feeds the
+-- weekly Auditor's missed-opportunity review with real numbers instead of
+-- qualitative pattern-matching.
+CREATE TABLE IF NOT EXISTS signal_shadow_checks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    signal_id INTEGER NOT NULL REFERENCES signals(id),
+    horizon_days INTEGER NOT NULL,      -- 1 / 3 / 5 calendar days after created_at
+    checked_at TEXT NOT NULL,
+    price_at_check REAL NOT NULL,
+    return_pct REAL NOT NULL,           -- direction-adjusted vs price_at_signal
+    notes TEXT,
+    UNIQUE(signal_id, horizon_days)     -- each horizon is checked at most once
 );
 
 -- Portfolio peak tracking for drawdown circuit breaker.

@@ -15,6 +15,7 @@ Running modes:
   python main.py reconcile → reconcile approved trades against Kite only
   python main.py audit     → run weekly audit now
   python main.py eod       → run EOD missed-opportunity sweep now
+  python main.py shadow    → run shadow price checks on blocked signals now
 """
 
 import logging
@@ -46,7 +47,7 @@ QC_ERROR_ALERT_THRESHOLD = int(os.getenv("QC_ERROR_ALERT_THRESHOLD", "3"))
 MIN_REGIME_CONFIDENCE = float(os.getenv("MIN_REGIME_CONFIDENCE", "0"))
 
 
-def _drop_candidate_before_qc(signal, sizing, status: str) -> None:
+def _drop_candidate_before_qc(signal, sizing, status: str, price_at_signal: float | None = None) -> None:
     """A candidate cleared the 75% bar but was dropped BEFORE QC — at the Risk
     Sizer, the live-price fetch, or the minimum-size check.
 
@@ -67,7 +68,7 @@ def _drop_candidate_before_qc(signal, sizing, status: str) -> None:
 
     signal_id = None
     try:
-        signal_id = log_signal(signal, sizing, status=status)
+        signal_id = log_signal(signal, sizing, status=status, price_at_signal=price_at_signal)
     except Exception as e:
         log.error(
             f"Could not log {status} signal for {signal.ticker}: {e}",
@@ -272,7 +273,7 @@ def run_cycle() -> None:
             f"{signal.ticker}: approved capital \u20b9{sizing.capital_to_deploy:,.0f} "
             f"buys less than one share at \u20b9{ltp:,.2f} — skipping."
         )
-        _drop_candidate_before_qc(signal, sizing, "DROPPED_SUBMIN")
+        _drop_candidate_before_qc(signal, sizing, "DROPPED_SUBMIN", price_at_signal=ltp)
         return
 
     log.info(
@@ -313,7 +314,7 @@ def run_cycle() -> None:
         )
 
         try:
-            signal_id = log_signal(signal, sizing, qc_verdict, status="QC_ERROR")
+            signal_id = log_signal(signal, sizing, qc_verdict, status="QC_ERROR", price_at_signal=ltp)
         except Exception as e:
             signal_id = None
             log.error(f"Could not log QC_ERROR signal: {e}", exc_info=True)
@@ -341,20 +342,42 @@ def run_cycle() -> None:
     except Exception:
         pass
 
-    if qc_verdict.verdict != "AGREE":
-        # A genuine DISAGREE / NEEDS_MORE_DATA. QC did its job.
-        log.info(f"QC {qc_verdict.verdict} — {qc_verdict.rationale[:120]}")
+    if qc_verdict.verdict == "DISAGREE":
+        # QC found a specific fact that contradicts the thesis (a technical
+        # criterion not actually met, a claim that doesn't check out, a
+        # regime mismatch). That is a refutation, not an absence of
+        # evidence — it stays a hard block.
+        log.info(f"QC DISAGREE — {qc_verdict.rationale[:120]}")
         try:
-            log_signal(signal, sizing, qc_verdict, status="QC_BLOCKED")
+            log_signal(signal, sizing, qc_verdict, status="QC_BLOCKED", price_at_signal=ltp)
         except Exception as e:
             log.error(f"Could not log QC_BLOCKED signal: {e}", exc_info=True)
         return
+
+    if qc_verdict.verdict == "NEEDS_MORE_DATA":
+        # QC couldn't verify a claim well enough to have an opinion either
+        # way — that is weaker than a refutation, and auto-blocking on it
+        # discards every candidate whose fundamentals happen to be
+        # unverifiable online (which, for smaller NSE names, is often just
+        # "no news fetched" rather than "something is wrong"). Alert it
+        # like a normal candidate, flagged so the decision is explicitly
+        # yours, same pattern the Risk Sizer already uses for its
+        # advisory-only limits below.
+        log.info(f"QC NEEDS_MORE_DATA — {qc_verdict.rationale[:120]} — alerting, not blocking")
+        risk_flags.append(
+            "QC returned NEEDS_MORE_DATA, not DISAGREE: it could not verify a key "
+            "claim, which is not the same as finding something wrong. "
+            f"{qc_verdict.rationale[:250]}"
+        )
+        # falls through to Step 5 — logged and alerted like AGREE, with the
+        # NEEDS_MORE_DATA verdict still recorded on the signal for the
+        # weekly audit to analyze separately from true AGREEs.
 
     # ----------------------------------------------------------------
     # Step 5: Log signal + send Gmail alert + mirror to Sheets
     # ----------------------------------------------------------------
     try:
-        signal_id = log_signal(signal, sizing, qc_verdict)
+        signal_id = log_signal(signal, sizing, qc_verdict, price_at_signal=ltp)
         update_signal_alert_sent(signal_id)
     except Exception as e:
         log.error(f"Ledger write failed: {e}", exc_info=True)
@@ -425,6 +448,21 @@ def run_position_monitor() -> None:
         log.error(f"Position monitor failed: {e}", exc_info=True)
 
 
+def run_shadow_price_checks() -> None:
+    """
+    15:45 IST (after the EOD sweep) — grade QC_BLOCKED / QC_ERROR signals at
+    their 1/3/5-day price horizons. Paper-only: reads LTP, writes to
+    signal_shadow_checks, never places an order.
+    """
+    from auditor.shadow_tracker import run_shadow_checks
+
+    log.info("Running shadow price checks...")
+    try:
+        run_shadow_checks()
+    except Exception as e:
+        log.error(f"Shadow price checks failed: {e}", exc_info=True)
+
+
 def run_weekly_audit(week_start: str | None = None, week_end: str | None = None) -> None:
     """Friday 16:00 IST — full week review via Gemini 3.5 Pro."""
     from auditor.weekly_audit import run_weekly_audit as _audit
@@ -456,7 +494,9 @@ if __name__ == "__main__":
         run_weekly_audit()
     elif cmd == "eod":
         run_eod_sweep()
+    elif cmd == "shadow":
+        run_shadow_price_checks()
     else:
         print(f"Unknown command: {cmd}")
-        print("Usage: python main.py [cycle|monitor|reconcile|audit|eod]")
+        print("Usage: python main.py [cycle|monitor|reconcile|audit|eod|shadow]")
         sys.exit(1)

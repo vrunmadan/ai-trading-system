@@ -180,7 +180,7 @@ def test_qc_down_alert_explains_how_to_diagnose(monkeypatch):
 # run_cycle's QC gate
 # ---------------------------------------------------------------------------
 
-def _run_cycle_to_qc(monkeypatch, ledger, signal, sizing, qc_verdict, spy):
+def _run_cycle_to_qc(monkeypatch, ledger, signal, sizing, qc_verdict, spy, send_trade_alert=None):
     """Drive run_cycle with everything upstream of QC stubbed out."""
     import main
 
@@ -188,7 +188,7 @@ def _run_cycle_to_qc(monkeypatch, ledger, signal, sizing, qc_verdict, spy):
 
     import alerts.gmail_alert as ga
     monkeypatch.setattr(ga, "send_plain_email", spy)
-    monkeypatch.setattr(ga, "send_trade_alert", lambda *a, **k: True)
+    monkeypatch.setattr(ga, "send_trade_alert", send_trade_alert or (lambda *a, **k: True))
 
     import risk_manager.portfolio_risk as pr
 
@@ -255,9 +255,51 @@ def test_genuine_qc_block_is_quiet_and_logs_qc_blocked(
     assert "QC unreachable" not in spy.subjects()
 
     with ledger.get_db() as conn:
-        rows = [dict(r) for r in conn.execute("SELECT status FROM signals")]
+        rows = [dict(r) for r in conn.execute("SELECT status, price_at_signal FROM signals")]
     assert rows[0]["status"] == "QC_BLOCKED"
+    assert rows[0]["price_at_signal"] == 450.0  # stubbed get_ltp in _run_cycle_to_qc
     assert ledger.get_qc_error_streak() == 0
+
+
+def test_genuine_needs_more_data_alerts_instead_of_blocking(
+    ledger, signal, sizing, monkeypatch
+):
+    """
+    A DISAGREE means QC found a specific contradicting fact — that stays a
+    hard block. NEEDS_MORE_DATA means QC couldn't verify a claim either way,
+    which is weaker than a refutation: it should alert like a normal
+    candidate, flagged, and leave the decision to the user rather than
+    silently discarding every signal whose fundamentals happen to be
+    unverifiable online.
+    """
+    sent_alerts = []
+
+    def _capture_alert(*a, **k):
+        sent_alerts.append(k)
+        return True
+
+    spy = MailSpy()
+    _run_cycle_to_qc(
+        monkeypatch, ledger, signal, sizing,
+        _qc("NEEDS_MORE_DATA", False, "Could not verify the sentiment claim."), spy,
+        send_trade_alert=_capture_alert,
+    )
+
+    # Not blocked: a trade alert went out, not silence.
+    assert len(sent_alerts) == 1
+    risk_flags = sent_alerts[0].get("risk_flags", [])
+    assert any("NEEDS_MORE_DATA" in f for f in risk_flags)
+
+    with ledger.get_db() as conn:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT status, qc_verdict, price_at_signal FROM signals")]
+    assert len(rows) == 1
+    # Logged like a normal alerted signal (PENDING), not QC_BLOCKED — but the
+    # NEEDS_MORE_DATA verdict is still on the row for the weekly audit to
+    # analyze separately from true AGREEs.
+    assert rows[0]["status"] == "PENDING"
+    assert rows[0]["qc_verdict"] == "NEEDS_MORE_DATA"
+    assert rows[0]["price_at_signal"] == 450.0
 
 
 def test_genuine_verdict_resets_a_running_streak(

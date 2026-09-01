@@ -12,6 +12,8 @@ logs and browser history — which makes sharing one key between "read my
 diagnostics" and "approve my trades" the more pressing half of the problem.
 """
 
+import os
+
 import pytest
 
 import webhook_server as ws
@@ -29,6 +31,7 @@ DIAGNOSTIC_ROUTES = [
     "/send_test_email",
     "/diagnose_cycle",
     "/cycle_history",
+    "/signal_history",
     "/diagnose_universe",
     "/refresh_universe",
 ]
@@ -136,6 +139,53 @@ def test_route_rejects_a_missing_secret(client, monkeypatch, route):
 def test_route_rejects_a_wrong_secret(client, monkeypatch, route):
     monkeypatch.setenv("DIAGNOSTIC_SECRET", "diag-secret")
     assert client.get(f"{route}?secret=wrong").status_code == 403
+
+
+def test_signal_history_renders_qc_rationale_and_shadow_check(client, monkeypatch, tmp_path):
+    """
+    The whole point of /signal_history: with the right secret, a QC_BLOCKED
+    row's full (untruncated) qc_rationale and any recorded shadow-check
+    return should actually show up in the page.
+    """
+    import sqlite3
+
+    import ledger.db as db
+
+    db_path = str(tmp_path / "test.db")
+    monkeypatch.setattr(db, "DB_PATH", db_path)
+    schema = os.path.join(os.path.dirname(db.__file__), "schema.sql")
+    with sqlite3.connect(db_path) as conn:
+        with open(schema) as f:
+            conn.executescript(f.read())
+        conn.commit()
+
+    long_rationale = "QC found the volume claim does not survive scrutiny. " * 5
+    with db.get_db() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO signals (
+                created_at, ticker, exchange, regime, strategy_bucket, direction,
+                technical_score, fundamental_score, confidence_score,
+                researcher_rationale, qc_verdict, qc_rationale, status, price_at_signal
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (db.now_ist(), "HEG", "NSE", "bull", "52wk_breakout", "BUY",
+             90.0, 60.0, 78.0, "Breakout thesis.", "DISAGREE",
+             long_rationale, "QC_BLOCKED", 100.0),
+        )
+        signal_id = cur.lastrowid
+    db.record_shadow_check(signal_id, horizon_days=1, price_at_check=110.0, return_pct=10.0)
+
+    monkeypatch.setenv("DIAGNOSTIC_SECRET", "diag-secret")
+    resp = client.get("/signal_history?secret=diag-secret&days=7")
+
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "HEG" in body
+    assert "QC_BLOCKED" in body
+    assert "does not survive scrutiny" in body  # full rationale, not a 120-char preview
+    assert "1d: +10.0%" in body
+    assert "price@signal=₹100.00" in body
 
 
 @pytest.mark.parametrize("route", DIAGNOSTIC_ROUTES)

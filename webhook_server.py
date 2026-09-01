@@ -836,13 +836,20 @@ def signal_history():
 
     try:
         import datetime, pytz
-        from ledger.db import get_signal_log
+        from ledger.db import get_signal_log, get_shadow_checks_for_signal_ids
 
         days = int(request.args.get("days", "7"))
         rows = get_signal_log(days=days)
 
         IST = pytz.timezone("Asia/Kolkata")
         now_ist = datetime.datetime.now(IST).strftime("%Y-%m-%d %H:%M IST")
+
+        shadow_by_signal = {}
+        try:
+            for c in get_shadow_checks_for_signal_ids([r["id"] for r in rows]):
+                shadow_by_signal.setdefault(c["signal_id"], []).append(c)
+        except Exception as e:
+            log.error(f"/signal_history: could not load shadow checks: {e}")
 
         if not rows:
             return make_response(
@@ -880,6 +887,25 @@ def signal_history():
                     <strong style='font-size:12px'>QC: {_esc(r['qc_verdict'])}</strong>
                     <div style='font-size:12px;color:#444;margin-top:4px'>{_esc(r['qc_rationale'])}</div>
                   </div>"""
+
+            shadow_line = ""
+            checks = shadow_by_signal.get(r["id"])
+            if checks:
+                chips = "".join(
+                    f"<span style='padding:2px 8px;border-radius:99px;font-size:11px;"
+                    f"font-weight:700;color:#fff;margin-right:6px;"
+                    f"background:{'#22c55e' if c['return_pct'] >= 0 else '#ef4444'}'>"
+                    f"{c['horizon_days']}d: {c['return_pct']:+.1f}%</span>"
+                    for c in sorted(checks, key=lambda c: c["horizon_days"])
+                )
+                shadow_line = f"""
+                  <div style='margin-top:8px'>
+                    <span style='font-size:11px;color:#64748b'>Shadow (hypothetical, no order placed): </span>
+                    {chips}
+                  </div>"""
+
+            price_bit = f" · price@signal=₹{r['price_at_signal']:,.2f}" if r.get("price_at_signal") else ""
+
             cards += f"""
 <div style='background:#fff;border-radius:8px;padding:14px 16px;margin-bottom:14px;
             box-shadow:0 1px 4px rgba(0,0,0,.08)'>
@@ -894,9 +920,11 @@ def signal_history():
     tech={r['technical_score'] or '—'} · fund={r['fundamental_score'] or '—'} ·
     conf={r['confidence_score'] or '—'}%
     {f" · qty={r['sized_quantity']} · ₹{r['capital_to_deploy']:,.0f}" if r['capital_to_deploy'] else ""}
+    {price_bit}
   </div>
   <div style='font-size:12px;color:#334155;margin-top:8px'>{_esc(r['researcher_rationale'])}</div>
   {qc_line}
+  {shadow_line}
 </div>"""
 
         html = f"""<!DOCTYPE html>
@@ -1052,6 +1080,16 @@ def _start_scheduler():
             name="EOD reconcile, position monitor, sweep",
         )
 
+        # Shadow price checks: Mon-Fri 15:45 IST, after the EOD sweep.
+        # Grades QC_BLOCKED / QC_ERROR signals at 1/3/5-day price horizons —
+        # paper-only, feeds the weekly Auditor's missed-opportunity review.
+        scheduler.add_job(
+            func=_safe_run_shadow_checks,
+            trigger=CronTrigger(day_of_week="mon-fri", hour=15, minute=45, timezone=IST),
+            id="shadow_checks",
+            name="Shadow price checks on blocked signals",
+        )
+
         # Weekly audit: Friday 16:00 IST
         scheduler.add_job(
             func=_safe_run_audit,
@@ -1071,7 +1109,7 @@ def _start_scheduler():
         )
 
         scheduler.start()
-        log.info("Scheduler started. Jobs: research cycle × 7/day, EOD, weekly audit.")
+        log.info("Scheduler started. Jobs: research cycle × 7/day, EOD, shadow checks, weekly audit.")
         return scheduler
 
     except Exception as e:
@@ -1110,6 +1148,14 @@ def _safe_run_eod():
         run_eod_sweep()
     except Exception as e:
         log.error(f"EOD job error: {e}", exc_info=True)
+
+
+def _safe_run_shadow_checks():
+    try:
+        from main import run_shadow_price_checks
+        run_shadow_price_checks()
+    except Exception as e:
+        log.error(f"Shadow price checks error: {e}", exc_info=True)
 
 
 def _safe_run_audit():

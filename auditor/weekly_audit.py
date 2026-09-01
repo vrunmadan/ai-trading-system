@@ -61,6 +61,27 @@ QC_BLOCKED, or QC_ERROR
  a run of QC_ERROR means the system was degraded, not selective.)
 Signals with status EXECUTED had a confirmed fill; APPROVED means the fill
 was never verified, so do not count those as taken trades.
+
+SHADOW_PRICE_CHECKS gives you real graded outcomes for QC_BLOCKED/QC_ERROR
+signals: each entry is {signal_id, horizon_days, return_pct, ...} — the
+hypothetical return, direction-adjusted, had that exact signal been taken
+at price_at_signal. Use these as evidence, not the researcher's rationale:
+  - A DISAGREE verdict whose shadow return at 3-5 days is negative is QC
+    correctly avoiding a loser — confirms QC is calibrated, not just cautious.
+  - A DISAGREE or NEEDS_MORE_DATA verdict whose shadow return is
+    meaningfully positive across multiple horizons is a genuine missed
+    opportunity — say so plainly, and note the ticker/strategy/reason QC gave.
+  - A signal created this week may only have 1- or 3-day checks by the time
+    of this audit (5-day lands after the week closes) — say so rather than
+    treating a missing horizon as "flat" or "no data."
+  - Distinguish DISAGREE from NEEDS_MORE_DATA in your read: DISAGREE means
+    QC found a specific contradicting fact; NEEDS_MORE_DATA means QC
+    couldn't verify a claim either way. If NEEDS_MORE_DATA signals are
+    winning about as often as they lose, and doing so more often than
+    DISAGREE signals, that specifically supports letting NEEDS_MORE_DATA
+    alert instead of auto-block (which is now how the pipeline behaves —
+    check whether the evidence actually backs that change).
+
 Describe any patterns you see. Were there genuine missed profits? Was the
 rejection/non-response systematically correlated with time of day, regime,
 or strategy type?
@@ -116,7 +137,10 @@ def run_weekly_audit(week_start: str | None = None, week_end: str | None = None)
         week_end:   "YYYY-MM-DD" — defaults to last Friday
     """
     import google.generativeai as genai
-    from ledger.db import get_signals_for_week, get_trades_for_week, get_db
+    from ledger.db import (
+        get_signals_for_week, get_trades_for_week, get_db,
+        get_shadow_checks_for_signal_ids,
+    )
 
     # Default to the just-completed Mon-Fri week
     if not week_start or not week_end:
@@ -149,9 +173,22 @@ def run_weekly_audit(week_start: str | None = None, week_end: str | None = None)
         log.info(f"No data for {week_start}–{week_end} — skipping audit.")
         return
 
+    # Shadow checks for this week's blocked/errored signals — see
+    # shadow_tracker.py. A signal from late in the week may only have its
+    # 1-day (or no) horizon recorded yet; the prompt tells the model to say
+    # so rather than misread a missing horizon as "flat."
+    blocked_ids = [
+        s["id"] for s in signals if s.get("status") in ("QC_BLOCKED", "QC_ERROR")
+    ]
+    try:
+        shadow_checks = get_shadow_checks_for_signal_ids(blocked_ids)
+    except Exception as e:
+        log.error(f"Could not fetch shadow checks for weekly audit: {e}")
+        shadow_checks = []
+
     log.info(
         f"Audit data: {len(signals)} signals, {len(trades)} trades, "
-        f"{len(position_checks)} position checks"
+        f"{len(position_checks)} position checks, {len(shadow_checks)} shadow checks"
     )
 
     # Build the prompt data block
@@ -165,6 +202,11 @@ TRADES ({len(trades)} total):
 
 DAILY POSITION CHECKS ({len(position_checks)} total):
 {json.dumps(position_checks, indent=2, default=str)}
+
+SHADOW_PRICE_CHECKS ({len(shadow_checks)} total) — hypothetical, direction-adjusted
+returns for QC_BLOCKED/QC_ERROR signals above, at 1/3/5-day horizons, had they
+been taken at price_at_signal. No order was ever placed for these:
+{json.dumps(shadow_checks, indent=2, default=str)}
 
 Please analyze and return your audit as JSON."""
 
