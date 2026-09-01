@@ -811,6 +811,113 @@ th{{text-align:center}}</style></head>
         return make_response(_html_response("Error", str(e), False), 500)
 
 
+@app.route("/signal_history", methods=["GET"])
+def signal_history():
+    """
+    Shows every row in the `signals` table — every candidate that cleared the
+    75% confidence gate and was sized, whether or not QC agreed with it.
+
+    The daily email only ever prints a 120-300 char preview of the QC and
+    researcher rationale. This is the "what did QC actually say" answer —
+    full, untruncated text for every AGREE / DISAGREE / NEEDS_MORE_DATA.
+
+    Query params:
+      days=N   — how many days back (default 7)
+      secret=  — required
+
+    Usage:
+      https://ai-trading-system-production-6af9.up.railway.app/signal_history?secret=<APPROVAL_SECRET>&days=7
+    """
+    from flask import make_response
+
+    if not _check_diagnostic_secret(request.args.get("secret", "")):
+        log.warning(f"Rejected unauthenticated request to {request.path}")
+        return make_response(_html_response("Forbidden", "Wrong or missing secret.", False), 403)
+
+    try:
+        import datetime, pytz
+        from ledger.db import get_signal_log
+
+        days = int(request.args.get("days", "7"))
+        rows = get_signal_log(days=days)
+
+        IST = pytz.timezone("Asia/Kolkata")
+        now_ist = datetime.datetime.now(IST).strftime("%Y-%m-%d %H:%M IST")
+
+        if not rows:
+            return make_response(
+                _html_response(
+                    "No data yet",
+                    f"No signals found in the last {days} day(s).",
+                    False,
+                ),
+                200,
+            )
+
+        status_color = {
+            "QC_BLOCKED": "#f59e0b", "QC_ERROR": "#ef4444",
+            "EXECUTED": "#22c55e", "APPROVED": "#22c55e",
+            "REJECTED": "#6b7280", "NOT_EXECUTED": "#ef4444",
+            "NO_RESPONSE": "#6b7280", "PENDING": "#3b82f6",
+        }
+
+        def _scolor(s):
+            for k, c in status_color.items():
+                if s.startswith(k):
+                    return c
+            return "#6b7280"  # DROPPED_*, SKIPPED, etc.
+
+        def _esc(t):
+            return (t or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+        cards = ""
+        for r in rows:
+            sc = _scolor(r["status"] or "")
+            qc_line = ""
+            if r["qc_verdict"]:
+                qc_line = f"""
+                  <div style='margin-top:8px;padding:10px;background:#f8fafc;border-radius:6px'>
+                    <strong style='font-size:12px'>QC: {_esc(r['qc_verdict'])}</strong>
+                    <div style='font-size:12px;color:#444;margin-top:4px'>{_esc(r['qc_rationale'])}</div>
+                  </div>"""
+            cards += f"""
+<div style='background:#fff;border-radius:8px;padding:14px 16px;margin-bottom:14px;
+            box-shadow:0 1px 4px rgba(0,0,0,.08)'>
+  <div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap'>
+    <strong style='font-size:14px'>{r['direction']} {r['ticker']}</strong>
+    <span style='font-size:11px;color:#64748b'>{r['exchange']} · {r['strategy_bucket']} · {r['regime']}</span>
+    <span style='padding:2px 10px;border-radius:99px;font-size:11px;font-weight:700;color:#fff;
+                 background:{sc}'>{r['status']}</span>
+    <span style='font-size:11px;color:#64748b;margin-left:auto'>{r['created_at']}</span>
+  </div>
+  <div style='font-size:11px;color:#64748b;margin-top:4px'>
+    tech={r['technical_score'] or '—'} · fund={r['fundamental_score'] or '—'} ·
+    conf={r['confidence_score'] or '—'}%
+    {f" · qty={r['sized_quantity']} · ₹{r['capital_to_deploy']:,.0f}" if r['capital_to_deploy'] else ""}
+  </div>
+  <div style='font-size:12px;color:#334155;margin-top:8px'>{_esc(r['researcher_rationale'])}</div>
+  {qc_line}
+</div>"""
+
+        html = f"""<!DOCTYPE html>
+<html><head><meta name='viewport' content='width=device-width,initial-scale=1'>
+<title>Signal History</title>
+<style>body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  padding:20px;background:#f8fafc;color:#1e293b;max-width:900px;margin:0 auto}}
+h1{{font-size:20px;margin:0 0 4px}}</style></head>
+<body>
+<h1>🔍 Signal History</h1>
+<p style='color:#64748b;margin:0 0 20px'>Last {days} day(s) — generated {now_ist} · {len(rows)} signal(s)</p>
+{cards}
+</body></html>"""
+
+        return make_response(html, 200)
+
+    except Exception as e:
+        log.error(f"/signal_history error: {e}", exc_info=True)
+        return make_response(_html_response("Error", str(e), False), 500)
+
+
 # ---------------------------------------------------------------------------
 # Universe diagnostic endpoint — checks CSV vs Kite live instrument list
 # ---------------------------------------------------------------------------

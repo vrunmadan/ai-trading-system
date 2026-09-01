@@ -9,7 +9,7 @@ anything goes wrong.
 import sqlite3
 import os
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytz
 
@@ -645,6 +645,31 @@ def get_cycle_log(days: int = 3) -> list[dict]:
             ORDER BY cycle_at DESC, ticker
             """,
             (f"-{days}",),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_signal_log(days: int = 7) -> list[dict]:
+    """
+    Return all `signals` rows from the last N days, newest first.
+
+    This is the "why did QC block this" answer — the researcher's own
+    rationale sits next to QC's full verdict + rationale, untruncated
+    (the daily email only ever prints 120-300 char previews of these).
+
+    created_at is stored as a naive IST string (see now_ist()), so the
+    cutoff is computed in Python against IST rather than SQLite's
+    datetime('now') (UTC) to avoid a ~5.5h skew in the window.
+    """
+    cutoff = (datetime.now(IST) - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM signals
+            WHERE created_at >= ?
+            ORDER BY created_at DESC
+            """,
+            (cutoff,),
         ).fetchall()
         return [dict(r) for r in rows]
 
