@@ -1,21 +1,29 @@
 """
-Shadow price tracker — grades QC_BLOCKED / QC_ERROR signals against what
-actually happened to the price, without ever placing an order.
+Shadow price tracker — grades signals that never became a trade (QC_BLOCKED,
+QC_ERROR, NO_RESPONSE) against what actually happened to the price, without
+ever placing an order.
 
 Why this exists:
-  Before this, a QC_BLOCKED signal recorded the researcher's scores and QC's
-  rationale but never the price at the moment it was blocked. The weekly
+  Before this, a blocked or unanswered signal recorded the researcher's
+  scores and QC's rationale but never the price at that moment. The weekly
   Auditor's "missed opportunity review" could describe patterns ("QC blocked
-  five high-technical signals citing unverifiable fundamentals") but could
-  never say whether blocking them was actually right, because there was
-  nothing to compare the price to afterward.
+  five high-technical signals citing unverifiable fundamentals", "this one
+  alerted and got no response") but could never say whether that outcome was
+  actually right, because there was nothing to compare the price to
+  afterward. NO_RESPONSE deserves the same rigor as QC_BLOCKED here: "QC
+  agreed and it alerted but nobody clicked" is just as answerable a question
+  as "QC blocked it" — both are "no trade happened," just for a different
+  reason. See ledger/db.py:SHADOW_CHECK_STATUSES for the exact scope
+  (REJECTED and NOT_EXECUTED are deliberately excluded — those are a
+  decision or an execution-layer outcome, not the pipeline silently not
+  asking).
 
 What it does:
-  Runs daily (Mon-Fri, after the EOD sweep) and, for every QC_BLOCKED /
-  QC_ERROR signal that has a recorded price_at_signal, checks the current
-  LTP at three fixed horizons — 1, 3, and 5 calendar days after the signal
-  was created — and records a direction-adjusted hypothetical return.
-  Each (signal, horizon) pair is checked at most once (see
+  Runs daily (Mon-Fri, after the EOD sweep) and, for every eligible signal
+  that has a recorded price_at_signal, checks the current LTP at three
+  fixed horizons — 1, 3, and 5 calendar days after the signal was created —
+  and records a direction-adjusted hypothetical return. Each (signal,
+  horizon) pair is checked at most once (see
   ledger/db.py:get_signals_needing_shadow_check / record_shadow_check).
 
 This is strictly a read of the live price. No order is placed, no sizing or
@@ -34,8 +42,8 @@ HORIZONS_DAYS = (1, 3, 5)
 
 def run_shadow_checks() -> int:
     """
-    Check every QC_BLOCKED/QC_ERROR signal due for a shadow check at any of
-    HORIZONS_DAYS and record the result.
+    Check every signal in ledger.db.SHADOW_CHECK_STATUSES due for a shadow
+    check at any of HORIZONS_DAYS and record the result.
 
     Safe to call daily: signals that already have a given horizon recorded
     are skipped (get_signals_needing_shadow_check excludes them), and

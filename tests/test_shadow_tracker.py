@@ -86,6 +86,29 @@ def test_excludes_agree_and_pending_signals(ledger):
     assert due == []
 
 
+def test_includes_no_response_signals(ledger):
+    """
+    QC agreeing and the alert going out isn't the end of the story if
+    nobody clicked it — that's just as gradeable a "no trade happened" as a
+    QC block, for a different reason (unanswered, not refused).
+    """
+    _insert_signal(ledger, "REDINGTON", "NO_RESPONSE", days_ago=2, qc_verdict="AGREE")
+    due = ledger.get_signals_needing_shadow_check(horizon_days=1)
+    assert len(due) == 1
+    assert due[0]["ticker"] == "REDINGTON"
+
+
+def test_excludes_rejected_and_not_executed_signals(ledger):
+    """
+    REJECTED is a decision, NOT_EXECUTED is an execution-layer outcome —
+    deliberately out of scope for now (see SHADOW_CHECK_STATUSES).
+    """
+    _insert_signal(ledger, "TITAN", "REJECTED", days_ago=2, qc_verdict="AGREE")
+    _insert_signal(ledger, "TITAN", "NOT_EXECUTED", days_ago=2, qc_verdict="AGREE")
+    due = ledger.get_signals_needing_shadow_check(horizon_days=1)
+    assert due == []
+
+
 def test_excludes_signals_with_no_recorded_price(ledger):
     _insert_signal(ledger, "HEG", "QC_BLOCKED", days_ago=2, price_at_signal=None)
     due = ledger.get_signals_needing_shadow_check(horizon_days=1)
@@ -152,6 +175,23 @@ def test_run_shadow_checks_computes_return_for_a_buy(ledger, monkeypatch):
     rows = ledger.get_shadow_checks_for_signal_ids([signal_id])
     assert len(rows) == 1
     assert rows[0]["horizon_days"] == 1
+    assert rows[0]["return_pct"] == pytest.approx(10.0)
+
+
+def test_run_shadow_checks_covers_a_no_response_signal(ledger, monkeypatch):
+    """The Redington case: QC agreed, the alert went out, nobody answered.
+    That's still worth grading — same mechanism as a QC_BLOCKED signal."""
+    import trader.kite_client as kc
+    monkeypatch.setattr(kc, "get_ltp", lambda ticker, exchange="NSE": 121.0)
+
+    signal_id = _insert_signal(ledger, "REDINGTON", "NO_RESPONSE", days_ago=2,
+                                price_at_signal=110.0, direction="BUY", qc_verdict="AGREE")
+
+    from auditor.shadow_tracker import run_shadow_checks
+    recorded = run_shadow_checks()
+
+    assert recorded == 1
+    rows = ledger.get_shadow_checks_for_signal_ids([signal_id])
     assert rows[0]["return_pct"] == pytest.approx(10.0)
 
 

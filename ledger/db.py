@@ -106,13 +106,16 @@ def log_signal(
     at the QC gate are logged too, with QC_BLOCKED or QC_ERROR, so a blocked
     candidate leaves a trace instead of vanishing — the daily summary counts
     them and the weekly Auditor can review them as missed opportunities.
+    PENDING rows later move to NO_RESPONSE if nothing is clicked before EOD.
 
     price_at_signal: the live LTP at the moment this signal was evaluated,
     when known (main.py fetches it for sizing before QC ever runs, so it's
-    available regardless of what QC or the sizer decide). Without this,
-    a QC_BLOCKED/QC_ERROR signal had no recorded price and there was no way
-    to later check whether blocking it was actually right — see
-    get_signals_needing_shadow_check() / record_shadow_check().
+    available regardless of what QC or the sizer decide). Without this, a
+    signal that never became a trade — blocked, errored, or just never
+    answered — had no recorded price and there was no way to later check
+    whether that was actually the right outcome — see
+    SHADOW_CHECK_STATUSES / get_signals_needing_shadow_check() /
+    record_shadow_check().
     """
     with get_db() as conn:
         cur = conn.execute(
@@ -688,13 +691,23 @@ def get_signal_log(days: int = 7) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Shadow price checks — grading QC_BLOCKED / QC_ERROR signals against what
-# actually happened, without ever placing an order.
+# Shadow price checks — grading QC_BLOCKED / QC_ERROR / NO_RESPONSE signals
+# against what actually happened, without ever placing an order.
 # ---------------------------------------------------------------------------
+
+# Every status a shadow check is worth running for: QC never let it alert
+# (QC_BLOCKED), QC couldn't be reached at all (QC_ERROR), or QC agreed and it
+# alerted but nobody acted on it before EOD (NO_RESPONSE). All three are
+# "no trade happened, but here's what the market did anyway" — the same
+# question, just a different reason nothing was placed. REJECTED and
+# NOT_EXECUTED are deliberately left out for now: those are decisions or
+# execution-layer outcomes rather than the pipeline silently not asking.
+SHADOW_CHECK_STATUSES = ("QC_BLOCKED", "QC_ERROR", "NO_RESPONSE")
+
 
 def get_signals_needing_shadow_check(horizon_days: int, max_age_days: int = 14) -> list[dict]:
     """
-    QC_BLOCKED / QC_ERROR signals old enough for a `horizon_days` shadow
+    Signals in SHADOW_CHECK_STATUSES old enough for a `horizon_days` shadow
     check that haven't had one recorded yet.
 
     Bounded by max_age_days so a gap in the scheduler (deploy downtime, a
@@ -705,11 +718,12 @@ def get_signals_needing_shadow_check(horizon_days: int, max_age_days: int = 14) 
     now = datetime.now(IST)
     due_before = (now - timedelta(days=horizon_days)).strftime("%Y-%m-%d %H:%M:%S")
     too_old_before = (now - timedelta(days=max_age_days)).strftime("%Y-%m-%d %H:%M:%S")
+    placeholders = ",".join("?" * len(SHADOW_CHECK_STATUSES))
     with get_db() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT s.* FROM signals s
-            WHERE s.status IN ('QC_BLOCKED', 'QC_ERROR')
+            WHERE s.status IN ({placeholders})
               AND s.price_at_signal IS NOT NULL
               AND s.created_at <= ?
               AND s.created_at >= ?
@@ -718,7 +732,7 @@ def get_signals_needing_shadow_check(horizon_days: int, max_age_days: int = 14) 
                   WHERE c.signal_id = s.id AND c.horizon_days = ?
               )
             """,
-            (due_before, too_old_before, horizon_days),
+            (*SHADOW_CHECK_STATUSES, due_before, too_old_before, horizon_days),
         ).fetchall()
         return [dict(r) for r in rows]
 

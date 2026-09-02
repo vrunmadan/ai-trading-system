@@ -93,12 +93,13 @@ CREATE TABLE IF NOT EXISTS cycle_log (
     rationale TEXT                      -- Claude's rationale (or error message)
 );
 
--- Shadow price checks — the only way to know whether a QC_BLOCKED / QC_ERROR
--- signal was actually a missed opportunity or a correctly-avoided loser.
--- Paper-only, no order ever placed: just "what would this position be worth
--- N days later" using price_at_signal as the hypothetical entry. Feeds the
--- weekly Auditor's missed-opportunity review with real numbers instead of
--- qualitative pattern-matching.
+-- Shadow price checks — the only way to know whether a signal that never
+-- became a trade (QC_BLOCKED, QC_ERROR, or alerted-but-NO_RESPONSE — see
+-- ledger/db.py:SHADOW_CHECK_STATUSES) was actually a missed opportunity or
+-- a correctly-avoided loser. Paper-only, no order ever placed: just "what
+-- would this position be worth N days later" using price_at_signal as the
+-- hypothetical entry. Feeds the weekly Auditor's missed-opportunity review
+-- with real numbers instead of qualitative pattern-matching.
 CREATE TABLE IF NOT EXISTS signal_shadow_checks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     signal_id INTEGER NOT NULL REFERENCES signals(id),

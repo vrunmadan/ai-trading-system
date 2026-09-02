@@ -87,7 +87,22 @@ def test_weekly_audit_includes_shadow_checks_for_blocked_signals(ledger, monkeyp
         )
         signal_id = cur.lastrowid
 
+        cur2 = conn.execute(
+            """
+            INSERT INTO signals (
+                created_at, ticker, exchange, regime, strategy_bucket, direction,
+                technical_score, fundamental_score, confidence_score,
+                researcher_rationale, qc_verdict, qc_rationale, status, price_at_signal
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (f"{week_start} 14:18:00", "REDINGTON", "NSE", "sideways", "52wk_breakout", "BUY",
+             90.0, 60.0, 78.0, "breakout thesis", "AGREE",
+             "No internal contradiction found.", "NO_RESPONSE", 362.55),
+        )
+        no_response_id = cur2.lastrowid
+
     ledger.record_shadow_check(signal_id, horizon_days=1, price_at_check=110.0, return_pct=10.0)
+    ledger.record_shadow_check(no_response_id, horizon_days=1, price_at_check=370.0, return_pct=2.06)
 
     captured = {}
     _monkeypatch_gemini(monkeypatch, captured)
@@ -99,6 +114,9 @@ def test_weekly_audit_includes_shadow_checks_for_blocked_signals(ledger, monkeyp
     assert "SHADOW_PRICE_CHECKS" in captured["prompt"]
     assert '"return_pct": 10.0' in captured["prompt"]
     assert "HEG" in captured["prompt"]
+    # NO_RESPONSE must get shadow-checked too, not just QC_BLOCKED/QC_ERROR.
+    assert "REDINGTON" in captured["prompt"]
+    assert '"return_pct": 2.06' in captured["prompt"]
 
     with ledger.get_db() as conn:
         row = conn.execute("SELECT * FROM weekly_audits").fetchone()

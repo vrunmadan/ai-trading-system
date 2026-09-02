@@ -62,10 +62,14 @@ QC_BLOCKED, or QC_ERROR
 Signals with status EXECUTED had a confirmed fill; APPROVED means the fill
 was never verified, so do not count those as taken trades.
 
-SHADOW_PRICE_CHECKS gives you real graded outcomes for QC_BLOCKED/QC_ERROR
-signals: each entry is {signal_id, horizon_days, return_pct, ...} — the
-hypothetical return, direction-adjusted, had that exact signal been taken
-at price_at_signal. Use these as evidence, not the researcher's rationale:
+SHADOW_PRICE_CHECKS gives you real graded outcomes for QC_BLOCKED, QC_ERROR,
+and alerted-but-NO_RESPONSE signals alike: each entry is {signal_id,
+horizon_days, return_pct, ...} — the hypothetical return, direction-adjusted,
+had that exact signal been taken at price_at_signal. A NO_RESPONSE signal
+with a strongly positive shadow return is just as much a missed opportunity
+as a QC_BLOCKED one — the reason nothing was traded is different (nobody
+clicked vs. QC refused it), but the outcome question is identical, so grade
+them the same way. Use these as evidence, not the researcher's rationale:
   - A DISAGREE verdict whose shadow return at 3-5 days is negative is QC
     correctly avoiding a loser — confirms QC is calibrated, not just cautious.
   - A DISAGREE or NEEDS_MORE_DATA verdict whose shadow return is
@@ -81,6 +85,21 @@ at price_at_signal. Use these as evidence, not the researcher's rationale:
     DISAGREE signals, that specifically supports letting NEEDS_MORE_DATA
     alert instead of auto-block (which is now how the pipeline behaves —
     check whether the evidence actually backs that change).
+
+QC CONSISTENCY CHECK — do this for every ticker with 2+ signals this week:
+Group same-ticker, same-strategy signals fired on different cycles the same
+day (the research cycle runs hourly, so this happens regularly). If QC's
+verdict differs across those cycles despite an equal-or-better technical
+picture on the ones it blocked — same or closer distance from the
+breakout/resistance level, same or higher volume/RSI/ADX support — that is
+QC calibration noise, not QC "doing its job" on the ones it refused. Report
+this as its own finding, separate from the missed-opportunity narrative:
+name the ticker, the cycle timestamps, and quote QC's stated objection from
+each verdict so the inconsistency (or its absence) is visible from the
+quotes themselves, not just your summary. A same-day flip-flop must not be
+described as "QC reviewed it and genuinely refused it" without first
+checking whether the technical inputs actually justified giving one cycle a
+different verdict than another.
 
 Describe any patterns you see. Were there genuine missed profits? Was the
 rejection/non-response systematically correlated with time of day, regime,
@@ -139,7 +158,7 @@ def run_weekly_audit(week_start: str | None = None, week_end: str | None = None)
     import google.generativeai as genai
     from ledger.db import (
         get_signals_for_week, get_trades_for_week, get_db,
-        get_shadow_checks_for_signal_ids,
+        get_shadow_checks_for_signal_ids, SHADOW_CHECK_STATUSES,
     )
 
     # Default to the just-completed Mon-Fri week
@@ -173,15 +192,16 @@ def run_weekly_audit(week_start: str | None = None, week_end: str | None = None)
         log.info(f"No data for {week_start}–{week_end} — skipping audit.")
         return
 
-    # Shadow checks for this week's blocked/errored signals — see
-    # shadow_tracker.py. A signal from late in the week may only have its
-    # 1-day (or no) horizon recorded yet; the prompt tells the model to say
-    # so rather than misread a missing horizon as "flat."
-    blocked_ids = [
-        s["id"] for s in signals if s.get("status") in ("QC_BLOCKED", "QC_ERROR")
+    # Shadow checks for this week's blocked/errored/unanswered signals — see
+    # shadow_tracker.py and ledger/db.py:SHADOW_CHECK_STATUSES. A signal from
+    # late in the week may only have its 1-day (or no) horizon recorded yet;
+    # the prompt tells the model to say so rather than misread a missing
+    # horizon as "flat."
+    shadow_eligible_ids = [
+        s["id"] for s in signals if s.get("status") in SHADOW_CHECK_STATUSES
     ]
     try:
-        shadow_checks = get_shadow_checks_for_signal_ids(blocked_ids)
+        shadow_checks = get_shadow_checks_for_signal_ids(shadow_eligible_ids)
     except Exception as e:
         log.error(f"Could not fetch shadow checks for weekly audit: {e}")
         shadow_checks = []
@@ -204,8 +224,9 @@ DAILY POSITION CHECKS ({len(position_checks)} total):
 {json.dumps(position_checks, indent=2, default=str)}
 
 SHADOW_PRICE_CHECKS ({len(shadow_checks)} total) — hypothetical, direction-adjusted
-returns for QC_BLOCKED/QC_ERROR signals above, at 1/3/5-day horizons, had they
-been taken at price_at_signal. No order was ever placed for these:
+returns for signals above with status in {SHADOW_CHECK_STATUSES} (never became a
+trade — blocked, errored, or alerted-but-unanswered), at 1/3/5-day horizons, had
+they been taken at price_at_signal. No order was ever placed for these:
 {json.dumps(shadow_checks, indent=2, default=str)}
 
 Please analyze and return your audit as JSON."""

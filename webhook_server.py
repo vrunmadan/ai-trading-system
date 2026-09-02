@@ -1081,8 +1081,9 @@ def _start_scheduler():
         )
 
         # Shadow price checks: Mon-Fri 15:45 IST, after the EOD sweep.
-        # Grades QC_BLOCKED / QC_ERROR signals at 1/3/5-day price horizons —
-        # paper-only, feeds the weekly Auditor's missed-opportunity review.
+        # Grades signals that never became a trade (QC_BLOCKED, QC_ERROR,
+        # NO_RESPONSE) at 1/3/5-day price horizons — paper-only, feeds the
+        # weekly Auditor's missed-opportunity review.
         scheduler.add_job(
             func=_safe_run_shadow_checks,
             trigger=CronTrigger(day_of_week="mon-fri", hour=15, minute=45, timezone=IST),

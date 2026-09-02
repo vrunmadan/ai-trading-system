@@ -450,9 +450,10 @@ def run_position_monitor() -> None:
 
 def run_shadow_price_checks() -> None:
     """
-    15:45 IST (after the EOD sweep) — grade QC_BLOCKED / QC_ERROR signals at
-    their 1/3/5-day price horizons. Paper-only: reads LTP, writes to
-    signal_shadow_checks, never places an order.
+    15:45 IST (after the EOD sweep) — grade signals that never became a
+    trade (QC_BLOCKED, QC_ERROR, NO_RESPONSE) at their 1/3/5-day price
+    horizons. Paper-only: reads LTP, writes to signal_shadow_checks, never
+    places an order.
     """
     from auditor.shadow_tracker import run_shadow_checks
 
