@@ -98,13 +98,42 @@ def test_includes_no_response_signals(ledger):
     assert due[0]["ticker"] == "REDINGTON"
 
 
-def test_excludes_rejected_and_not_executed_signals(ledger):
+@pytest.mark.parametrize("status", [
+    "REJECTED", "NOT_EXECUTED", "SKIPPED", "DROPPED_SUBMIN", "DROPPED_SIZER",
+])
+def test_includes_every_no_trade_status(ledger, status):
     """
-    REJECTED is a decision, NOT_EXECUTED is an execution-layer outcome —
-    deliberately out of scope for now (see SHADOW_CHECK_STATUSES).
+    Every reason a candidate didn't become a trade is the same underlying
+    question — was skipping it right? — so all of these get graded the
+    same way (see SHADOW_CHECK_STATUSES).
     """
-    _insert_signal(ledger, "TITAN", "REJECTED", days_ago=2, qc_verdict="AGREE")
-    _insert_signal(ledger, "TITAN", "NOT_EXECUTED", days_ago=2, qc_verdict="AGREE")
+    _insert_signal(ledger, "TITAN", status, days_ago=2, qc_verdict="AGREE")
+    due = ledger.get_signals_needing_shadow_check(horizon_days=1)
+    assert len(due) == 1
+    assert due[0]["ticker"] == "TITAN"
+
+
+@pytest.mark.parametrize("status", ["PENDING", "APPROVED", "EXECUTED"])
+def test_excludes_unresolved_or_already_graded_statuses(ledger, status):
+    """
+    PENDING/APPROVED haven't resolved yet (checking now would double-count
+    once they do); EXECUTED already has a real P&L via trades.pnl, so a
+    hypothetical shadow return next to it would be redundant.
+    """
+    _insert_signal(ledger, "TITAN", status, days_ago=2, qc_verdict="AGREE")
+    due = ledger.get_signals_needing_shadow_check(horizon_days=1)
+    assert due == []
+
+
+def test_excludes_dropped_no_price_even_with_a_price_somehow_set(ledger):
+    """
+    DROPPED_NO_PRICE means the LTP fetch itself failed — there is no
+    legitimate price_at_signal for it. Excluded by name too, not just by
+    the IS NOT NULL filter, in case a future bug ever back-fills a price
+    for a row that was dropped specifically for lacking one.
+    """
+    _insert_signal(ledger, "TITAN", "DROPPED_NO_PRICE", days_ago=2,
+                    price_at_signal=100.0, qc_verdict="AGREE")
     due = ledger.get_signals_needing_shadow_check(horizon_days=1)
     assert due == []
 

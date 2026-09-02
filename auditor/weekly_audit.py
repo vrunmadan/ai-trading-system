@@ -53,23 +53,29 @@ If sample is < 3 closed trades in a bucket, say so explicitly and do not over-fi
 TASK 2: MISSED OPPORTUNITY REVIEW
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Look at signals with status: NO_RESPONSE, REJECTED, SKIPPED, NOT_EXECUTED,
-QC_BLOCKED, or QC_ERROR
+QC_BLOCKED, QC_ERROR, DROPPED_SUBMIN, or DROPPED_SIZER
 (NOT_EXECUTED = approved but the order never reached the market.
  QC_BLOCKED = QC reviewed it and genuinely refused it, which is QC working.
  QC_ERROR = QC could not be reached at all, so the trade was lost to an
  infrastructure fault rather than to a judgement. Call these out separately;
- a run of QC_ERROR means the system was degraded, not selective.)
+ a run of QC_ERROR means the system was degraded, not selective.
+ DROPPED_SUBMIN = the approved capital bought less than one share at the
+ live price — a sizing/capital-base issue, not a judgement about the trade.
+ DROPPED_SIZER = the Risk Sizer's own hard limits rejected it outright.)
 Signals with status EXECUTED had a confirmed fill; APPROVED means the fill
 was never verified, so do not count those as taken trades.
 
-SHADOW_PRICE_CHECKS gives you real graded outcomes for QC_BLOCKED, QC_ERROR,
-and alerted-but-NO_RESPONSE signals alike: each entry is {signal_id,
-horizon_days, return_pct, ...} — the hypothetical return, direction-adjusted,
-had that exact signal been taken at price_at_signal. A NO_RESPONSE signal
-with a strongly positive shadow return is just as much a missed opportunity
-as a QC_BLOCKED one — the reason nothing was traded is different (nobody
-clicked vs. QC refused it), but the outcome question is identical, so grade
-them the same way. Use these as evidence, not the researcher's rationale:
+SHADOW_PRICE_CHECKS gives you real graded outcomes across every one of
+those non-trade statuses: each entry is {signal_id, horizon_days,
+return_pct, ...} — the hypothetical return, direction-adjusted, had that
+exact signal been taken at price_at_signal. The reason nothing was traded
+is different in each case (QC refused it, nobody clicked, you rejected it,
+the order never landed, the sizer math dropped it) but the outcome
+question is identical, so grade all of them the same way — a REJECTED
+signal with a strongly positive shadow return is exactly as much a missed
+opportunity as a QC_BLOCKED one with the same return, and deserves to be
+named just as plainly. Use these as evidence, not the researcher's
+rationale:
   - A DISAGREE verdict whose shadow return at 3-5 days is negative is QC
     correctly avoiding a loser — confirms QC is calibrated, not just cautious.
   - A DISAGREE or NEEDS_MORE_DATA verdict whose shadow return is

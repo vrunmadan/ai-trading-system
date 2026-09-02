@@ -231,6 +231,19 @@ def run_cycle() -> None:
         # the way to the alert. The decision to trade is the user's.
         if sizing.notes.startswith("Weekly drawdown"):
             log.warning(f"Cycle halted by sizer HARD stop: {sizing.notes}")
+            # This used to just return here — a candidate that cleared 75%
+            # and was killed by the portfolio circuit breaker left zero
+            # trace: no signals row, no alert, no shadow-check eligibility.
+            # The alert templates already describe "weekly drawdown" as a
+            # DROPPED_SIZER cause (see gmail_alert._DROP_STAGE_BLURB), so
+            # this brings the code in line with what was already designed.
+            price_at_stop = None
+            try:
+                from trader.kite_client import get_ltp
+                price_at_stop = get_ltp(signal.ticker, getattr(signal, "exchange", "NSE"))
+            except Exception as e:
+                log.debug(f"Could not fetch LTP for drawdown-halted {signal.ticker}: {e}")
+            _drop_candidate_before_qc(signal, sizing, "DROPPED_SIZER", price_at_signal=price_at_stop)
             return
         log.info(f"Sizer advisory (NOT halting): {sizing.notes}")
         from risk_sizer.sizer import suggested_capital
@@ -450,8 +463,8 @@ def run_position_monitor() -> None:
 
 def run_shadow_price_checks() -> None:
     """
-    15:45 IST (after the EOD sweep) — grade signals that never became a
-    trade (QC_BLOCKED, QC_ERROR, NO_RESPONSE) at their 1/3/5-day price
+    15:45 IST (after the EOD sweep) — grade every signal that never became
+    a trade (see ledger.db.SHADOW_CHECK_STATUSES) at its 1/3/5-day price
     horizons. Paper-only: reads LTP, writes to signal_shadow_checks, never
     places an order.
     """

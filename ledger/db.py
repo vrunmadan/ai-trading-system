@@ -691,18 +691,37 @@ def get_signal_log(days: int = 7) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Shadow price checks — grading QC_BLOCKED / QC_ERROR / NO_RESPONSE signals
-# against what actually happened, without ever placing an order.
+# Shadow price checks — grading every "no trade happened" outcome against
+# what the price actually did, without ever placing an order.
 # ---------------------------------------------------------------------------
 
-# Every status a shadow check is worth running for: QC never let it alert
-# (QC_BLOCKED), QC couldn't be reached at all (QC_ERROR), or QC agreed and it
-# alerted but nobody acted on it before EOD (NO_RESPONSE). All three are
-# "no trade happened, but here's what the market did anyway" — the same
-# question, just a different reason nothing was placed. REJECTED and
-# NOT_EXECUTED are deliberately left out for now: those are decisions or
-# execution-layer outcomes rather than the pipeline silently not asking.
-SHADOW_CHECK_STATUSES = ("QC_BLOCKED", "QC_ERROR", "NO_RESPONSE")
+# Every status worth a shadow check: any point in the pipeline where a
+# candidate that cleared the confidence bar did NOT end up as a trade.
+# The reason differs — QC refused it, QC was unreachable, nobody answered
+# the alert, you explicitly rejected it, the order never reached the
+# market, the sizer/min-size math dropped it before it ever got sized —
+# but the underlying question is identical every time: "was not trading
+# this one actually right?" Grading all of them the same way, every week,
+# is how the whole system — QC's calibration, the sizer's thresholds, even
+# whether YOU tend to reject the ones that would have won — gets checked
+# against reality instead of running forever on vibes. This is exactly as
+# important once real money is on the line, arguably more so: a pattern of
+# good candidates dying at the sizer or going unanswered is capital being
+# left on the table for no better reason than friction.
+#
+# Left out, and why:
+#   PENDING / APPROVED — not yet resolved. The eventual terminal status
+#     (NOT_EXECUTED, EXECUTED, ...) is what gets graded; checking a
+#     signal that might still become a real trade would double-count it.
+#   EXECUTED — already graded for real, via trades.pnl. A hypothetical
+#     shadow return next to an actual fill would be redundant and confusing.
+#   DROPPED_NO_PRICE — no price_at_signal exists by construction (the LTP
+#     fetch itself failed), so there is nothing to compare against. The
+#     price_at_signal IS NOT NULL filter below excludes it either way.
+SHADOW_CHECK_STATUSES = (
+    "QC_BLOCKED", "QC_ERROR", "NO_RESPONSE", "REJECTED", "NOT_EXECUTED",
+    "SKIPPED", "DROPPED_SUBMIN", "DROPPED_SIZER",
+)
 
 
 def get_signals_needing_shadow_check(horizon_days: int, max_age_days: int = 14) -> list[dict]:

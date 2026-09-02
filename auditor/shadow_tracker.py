@@ -1,22 +1,27 @@
 """
-Shadow price tracker — grades signals that never became a trade (QC_BLOCKED,
-QC_ERROR, NO_RESPONSE) against what actually happened to the price, without
-ever placing an order.
+Shadow price tracker — grades every signal that never became a trade
+against what actually happened to the price, without ever placing an order.
 
 Why this exists:
-  Before this, a blocked or unanswered signal recorded the researcher's
-  scores and QC's rationale but never the price at that moment. The weekly
-  Auditor's "missed opportunity review" could describe patterns ("QC blocked
-  five high-technical signals citing unverifiable fundamentals", "this one
-  alerted and got no response") but could never say whether that outcome was
+  Before this, a blocked, rejected, or unanswered signal recorded the
+  researcher's scores and QC's rationale but never the price at that
+  moment. The weekly Auditor's "missed opportunity review" could describe
+  patterns ("QC blocked five high-technical signals citing unverifiable
+  fundamentals", "this one alerted and got no response", "you rejected
+  this one") but could never say whether any of those outcomes were
   actually right, because there was nothing to compare the price to
-  afterward. NO_RESPONSE deserves the same rigor as QC_BLOCKED here: "QC
-  agreed and it alerted but nobody clicked" is just as answerable a question
-  as "QC blocked it" — both are "no trade happened," just for a different
-  reason. See ledger/db.py:SHADOW_CHECK_STATUSES for the exact scope
-  (REJECTED and NOT_EXECUTED are deliberately excluded — those are a
-  decision or an execution-layer outcome, not the pipeline silently not
-  asking).
+  afterward. Every reason a candidate didn't become a trade — QC refused
+  it, QC was unreachable, nobody answered, you rejected it, the order
+  never reached the market, the sizer math dropped it — is the same
+  underlying question: was NOT trading this one correct? Grading all of
+  them the same way is how QC's calibration, the sizer's thresholds, and
+  even your own reject/ignore patterns get checked against reality instead
+  of running on vibes indefinitely — this matters at least as much once
+  real money is on the line, since by then "we didn't trade it" is capital
+  sitting on the table for whatever reason, not just a research exercise.
+  See ledger/db.py:SHADOW_CHECK_STATUSES for the exact scope and what's
+  deliberately excluded (PENDING/APPROVED are unresolved, EXECUTED is
+  already graded via real P&L, DROPPED_NO_PRICE has no price to compare).
 
 What it does:
   Runs daily (Mon-Fri, after the EOD sweep) and, for every eligible signal
