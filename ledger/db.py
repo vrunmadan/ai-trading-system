@@ -652,15 +652,29 @@ def log_cycle_evaluation(
 
 
 def get_cycle_log(days: int = 3) -> list[dict]:
-    """Return all cycle_log rows from the last N days, newest first."""
+    """
+    Return all cycle_log rows from the last N days, newest first.
+
+    The cutoff is computed in Python against IST, not via SQLite's
+    datetime('now', '-N days'). cycle_at is stored as a naive IST wall-clock
+    string (see now_ist()), but SQLite's datetime('now') returns UTC — as a
+    raw string comparison, that understates the cutoff by the +5:30 offset,
+    which OVERSTATES how far back "N days" actually reaches (a "days=1"
+    window ends up spanning ~29.5 real hours, not 24). That's exactly how a
+    signal from ~27 hours ago showed up in a "Top 5 scores today" table a
+    full calendar day after it actually fired — it was never re-evaluated
+    that day, it just hadn't aged out of the oversized window yet. See
+    get_signal_log() above, which already used this correct pattern.
+    """
+    cutoff = (datetime.now(IST) - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
         rows = conn.execute(
             """
             SELECT * FROM cycle_log
-            WHERE cycle_at >= datetime('now', ? || ' days')
+            WHERE cycle_at >= ?
             ORDER BY cycle_at DESC, ticker
             """,
-            (f"-{days}",),
+            (cutoff,),
         ).fetchall()
         return [dict(r) for r in rows]
 
