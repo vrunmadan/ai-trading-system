@@ -38,6 +38,8 @@ from datetime import datetime
 import pytz
 
 log = logging.getLogger(__name__)
+
+from researcher.signal_generator import MIN_CONFIDENCE
 IST = pytz.timezone("Asia/Kolkata")
 
 ALERT_EMAIL     = os.getenv("ALERT_EMAIL", "")
@@ -681,7 +683,7 @@ def send_qc_down_alert(streak: int) -> bool:
 
 
 # Human-readable explanation per pre-QC drop stage. Keys are the signal
-# `status` values written by main.py when a 75%+ candidate is dropped BEFORE
+# `status` values written by main.py when a candidate clearing MIN_SIGNAL_CONFIDENCE
 # it ever reaches QC. These used to return silently — the whole point here is
 # that a qualifying trade can no longer vanish without a trace or a heads-up.
 _DROP_STAGE_BLURB = {
@@ -704,7 +706,7 @@ _DROP_STAGE_BLURB = {
 
 def send_candidate_dropped_alert(signal_id, signal, sizing, status: str) -> bool:
     """
-    Fired the moment a candidate that cleared the 75% confidence bar is dropped
+    Fired the moment a candidate that cleared the confidence bar is dropped
     BEFORE reaching QC — at the Risk Sizer or the price/size step.
 
     Immediate, not batched: like the QC-unreachable alert, a missed trade is
@@ -720,7 +722,7 @@ def send_candidate_dropped_alert(signal_id, signal, sizing, status: str) -> bool
         if getattr(sizing, "capital_to_deploy", 0) else ""
     )
     body = (
-        "A trade signal cleared the Researcher's 75% confidence bar, then was "
+        f"A trade signal cleared the Researcher's {MIN_CONFIDENCE:.0f}% confidence bar, then was "
         "dropped BEFORE the QC fact-checker ran.\n\n"
         "This is NOT a QC rejection and NOT a quiet market — it is a candidate "
         "that would otherwise have gone to QC and possibly to you as an "
@@ -777,13 +779,13 @@ def send_daily_cycle_summary() -> None:
 
     # Three outcomes that must never be collapsed into one another:
     #   alerted    a candidate cleared QC and an Approve/Reject alert went out
-    #   qc_blocked a candidate cleared 75% and QC genuinely refused it
-    #   qc_errored a candidate cleared 75% and QC could not be reached
+    #   qc_blocked a candidate cleared the confidence bar and QC genuinely refused it
+    #   qc_errored a candidate cleared the confidence bar and QC could not be reached
     # The third is a system fault. Reporting it as "no signals today" is what
     # let an exhausted API quota look exactly like a quiet market.
     qc_errored = [r for r in signals_today if r["status"] == "QC_ERROR"]
     qc_blocked = [r for r in signals_today if r["status"] == "QC_BLOCKED"]
-    # Cleared 75% but dropped BEFORE QC (sizer / price / min-size). These used
+    # Cleared the confidence bar but dropped BEFORE QC (sizer / price / min-size). These used
     # to leave no signals-table row at all, so the summary called them "nothing
     # cleared." Now they are recorded and counted here as a distinct outcome.
     dropped = [r for r in signals_today
@@ -805,7 +807,7 @@ def send_daily_cycle_summary() -> None:
                 f"conf={r['confidence_score']:.0f}%  [{r['verdict']}]"
                 for r in top5
             )
-            top_block = f"\nTop 5 scores today (75% needed to fire):\n{top_lines}"
+            top_block = f"\nTop 5 scores today ({MIN_CONFIDENCE:.0f}% needed to fire):\n{top_lines}"
         else:
             top_block = ""
     except Exception:
@@ -823,7 +825,7 @@ def send_daily_cycle_summary() -> None:
     if qc_errored:
         blocks.append(
             "\U0001f6a8 SYSTEM DEGRADED \u2014 QC WAS UNREACHABLE\n"
-            f"{len(qc_errored)} candidate(s) cleared the 75% threshold and were "
+            f"{len(qc_errored)} candidate(s) cleared the {MIN_CONFIDENCE:.0f}% threshold and were "
             "sized, then blocked because the QC fact-checker could not be "
             "reached. These are NOT rejections \u2014 they are trades lost to an "
             "infrastructure fault.\n"
@@ -834,7 +836,7 @@ def send_daily_cycle_summary() -> None:
     if qc_blocked:
         blocks.append(
             "QC reviewed and blocked:\n"
-            f"{len(qc_blocked)} candidate(s) cleared 75% but QC returned a "
+            f"{len(qc_blocked)} candidate(s) cleared {MIN_CONFIDENCE:.0f}% but QC returned a "
             "genuine DISAGREE / NEEDS_MORE_DATA. This is QC working as "
             "intended.\n"
             f"{_lines(qc_blocked)}"
@@ -843,8 +845,8 @@ def send_daily_cycle_summary() -> None:
     if dropped:
         no_price = [r for r in dropped if r["status"] == "DROPPED_NO_PRICE"]
         header = (
-            "⚠ CLEARED 75% BUT DROPPED BEFORE QC\n"
-            f"{len(dropped)} candidate(s) cleared the Researcher's 75% bar but "
+            f"⚠ CLEARED {MIN_CONFIDENCE:.0f}% BUT DROPPED BEFORE QC\n"
+            f"{len(dropped)} candidate(s) cleared the Researcher's {MIN_CONFIDENCE:.0f}% bar but "
             "never reached QC — dropped at the Risk Sizer or the price/size "
             "step. These are NOT quiet-market cycles; each was a real "
             "qualifying signal.\n"
@@ -862,7 +864,7 @@ def send_daily_cycle_summary() -> None:
 
     if not blocks:
         blocks.append(
-            "No candidate cleared the 75% confidence threshold today.\n"
+            f"No candidate cleared the {MIN_CONFIDENCE:.0f}% confidence threshold today.\n"
             "  (QC was not the blocker \u2014 nothing reached it.)"
         )
 

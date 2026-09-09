@@ -680,6 +680,7 @@ def cycle_history():
     try:
         import datetime, pytz
         from ledger.db import get_cycle_log
+        from researcher.signal_generator import MIN_CONFIDENCE
 
         days = int(request.args.get("days", "1"))
         rows = get_cycle_log(days=days)
@@ -722,7 +723,7 @@ def cycle_history():
             if low_good:
                 color = "#22c55e" if v < 35 else ("#f59e0b" if v < 50 else "#6b7280")
             else:
-                color = "#22c55e" if v >= 75 else ("#f59e0b" if v >= 60 else "#ef4444")
+                color = "#22c55e" if v >= MIN_CONFIDENCE else ("#f59e0b" if v >= 60 else "#ef4444")
             return f"<td style='color:{color};font-weight:600'>{v:.0f}</td>"
 
         sections = ""
@@ -764,7 +765,7 @@ def cycle_history():
       {"✓" if regime_ok else "⚠ SKIPPED (< 60%)"}</span>
     <span style='font-size:12px;color:#64748b;margin-left:auto'>
       {len(cycle_rows)} evaluated · best score: <strong>{best_score:.0f}%</strong> ·
-      signals above 75%: <strong style='color:{"#22c55e" if trade_count else "#6b7280"}'>{trade_count}</strong>
+      signals above {MIN_CONFIDENCE:.0f}%: <strong style='color:{"#22c55e" if trade_count else "#6b7280"}'>{trade_count}</strong>
     </span>
   </div>
   <div style='overflow-x:auto'>
@@ -798,8 +799,8 @@ th{{text-align:center}}</style></head>
 <body>
 <h1>📊 Cycle Evaluation History</h1>
 <p style='color:#64748b;margin:0 0 20px'>Last {days} day(s) — generated {now_ist}<br>
-<strong style='color:#22c55e'>Green ≥ 75</strong> ·
-<strong style='color:#f59e0b'>Amber 60–74</strong> ·
+<strong style='color:#22c55e'>Green ≥ {MIN_CONFIDENCE:.0f}</strong> ·
+<strong style='color:#f59e0b'>Amber 60–{MIN_CONFIDENCE - 1:.0f}</strong> ·
 <strong style='color:#ef4444'>Red &lt; 60</strong> (confidence column = threshold)</p>
 {sections}
 </body></html>"""
@@ -815,7 +816,7 @@ th{{text-align:center}}</style></head>
 def signal_history():
     """
     Shows every row in the `signals` table — every candidate that cleared the
-    75% confidence gate and was sized, whether or not QC agreed with it.
+    MIN_SIGNAL_CONFIDENCE gate and was sized, whether or not QC agreed with it.
 
     The daily email only ever prints a 120-300 char preview of the QC and
     researcher rationale. This is the "what did QC actually say" answer —
