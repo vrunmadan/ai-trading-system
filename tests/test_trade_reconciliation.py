@@ -65,18 +65,23 @@ def _insert_signal(db, quantity=400, capital=180_000.0, exchange="NSE",
 class FakeKite:
     """Minimal stand-in for KiteConnect: only what the reconciler calls."""
 
-    def __init__(self, positions=None, holdings=None, fail=False):
+    def __init__(self, positions=None, holdings=None, fail=False,
+                 fail_positions=None, fail_holdings=None):
         self._positions = positions or []
         self._holdings = holdings or []
-        self.fail = fail
+        # fail=True fails both, for the "Kite is completely unreachable" case.
+        # fail_positions/fail_holdings let a test fail just one, to exercise
+        # the partial-failure path.
+        self.fail_positions = fail if fail_positions is None else fail_positions
+        self.fail_holdings = fail if fail_holdings is None else fail_holdings
 
     def positions(self):
-        if self.fail:
+        if self.fail_positions:
             raise RuntimeError("kite down")
         return {"net": self._positions, "day": []}
 
     def holdings(self):
-        if self.fail:
+        if self.fail_holdings:
             raise RuntimeError("kite down")
         return self._holdings
 
@@ -351,6 +356,75 @@ def test_kite_unreachable_leaves_rows_pending_rather_than_wiping_them(
     assert summary["skipped"] is True
     assert summary["not_executed"] == 0
     assert len(db.get_open_positions()) == 1
+
+
+def test_both_kite_reads_failing_leaves_live_rows_pending(ledger, monkeypatch):
+    """
+    get_kite_client() can succeed (the token parses fine) while every actual
+    request against it fails (the token is expired or revoked). Before the
+    fix, holdings()/positions() swallowed their own exceptions and returned
+    an empty map indistinguishable from "you hold nothing" — reproduced in
+    the 2026-09-19 review as a LIVE row silently written off to NOT_EXECUTED.
+    """
+    db = ledger
+    _approve_live(db, monkeypatch)
+    assert len(db.get_open_positions()) == 1
+
+    _use_kite(monkeypatch, FakeKite(fail=True))
+    monkeypatch.setattr("monitor.trade_reconciler.MAX_PENDING_AGE_DAYS", 0)
+
+    from monitor.trade_reconciler import reconcile_pending_trades
+    summary = reconcile_pending_trades()
+
+    assert summary["skipped"] is True
+    assert summary["not_executed"] == 0
+    assert len(db.get_open_positions()) == 1
+    assert db.get_pending_trades()[0]["fill_status"] == "PENDING"
+
+
+def test_partial_kite_failure_defers_rather_than_writes_off(ledger, monkeypatch):
+    """
+    holdings() failing while positions() succeeds (or vice versa) must not be
+    read as "not found anywhere" — the failed source might be exactly where
+    a settled position now lives. The row must defer, not age out to
+    NOT_EXECUTED, no matter how old it is.
+    """
+    db = ledger
+    _approve_live(db, monkeypatch)
+
+    _use_kite(monkeypatch, FakeKite(holdings=[], fail_holdings=True))
+    # Old enough that a COMPLETE empty snapshot would have written it off.
+    monkeypatch.setattr("monitor.trade_reconciler.MAX_PENDING_AGE_DAYS", 0)
+
+    from monitor.trade_reconciler import reconcile_pending_trades
+    summary = reconcile_pending_trades()
+
+    assert summary["skipped"] is False   # positions() DID work, so we ran
+    assert summary["not_executed"] == 0
+    assert summary["confirmed"] == 0
+    assert summary["deferred"] == 1
+    assert len(db.get_open_positions()) == 1
+    assert db.get_pending_trades()[0]["fill_status"] == "PENDING"
+
+
+def test_partial_kite_failure_still_confirms_a_real_match(ledger, monkeypatch):
+    """A match found in the source that DID work must still confirm —
+    incompleteness only matters for a miss, not a hit."""
+    db = ledger
+    trade = _approve_live(db, monkeypatch)
+
+    _use_kite(monkeypatch, FakeKite(
+        positions=[{"tradingsymbol": "ACME", "exchange": "NSE",
+                    "quantity": 400, "average_price": 450.0}],
+        fail_holdings=True,
+    ))
+
+    from monitor.trade_reconciler import reconcile_pending_trades
+    summary = reconcile_pending_trades()
+
+    assert summary["confirmed"] == 1
+    row = db.get_trade_for_signal(trade["signal_id"])
+    assert row["fill_status"] == "CONFIRMED"
 
 
 def test_reconcile_is_a_noop_with_nothing_pending(ledger, monkeypatch):

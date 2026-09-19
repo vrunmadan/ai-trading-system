@@ -39,19 +39,32 @@ def _position_key(exchange: str, tradingsymbol: str) -> str:
     return f"{(exchange or 'NSE').upper()}:{(tradingsymbol or '').upper()}"
 
 
-def _build_holdings_map(kite) -> dict[str, dict]:
+def _build_holdings_map(kite) -> tuple[dict[str, dict], bool, bool]:
     """
     Merge kite.positions()['net'] and kite.holdings() into one
     "EXCHANGE:SYMBOL" -> {quantity, average_price, source} map.
 
     positions() wins when a symbol appears in both, because it reflects
     today's activity. Each source is fetched independently so one failing
-    does not blind the other.
+    does not blind the other — but the caller must know WHICH sources
+    actually succeeded. A symbol's absence from the merged map is only
+    trustworthy evidence of "not held" when BOTH sources are known-good;
+    if either call failed, that absence is unverified, not a fact. Before
+    this fix, holdings()/positions() failures were swallowed here and the
+    caller saw only an empty (or partial) map indistinguishable from a
+    confirmed-empty account — reproduced in the 2026-09-19 review as a
+    LIVE row getting marked NOT_EXECUTED purely because both Kite calls
+    happened to fail on that run.
+
+    Returns (merged, holdings_ok, positions_ok).
     """
     merged: dict[str, dict] = {}
+    holdings_ok = False
+    positions_ok = False
 
     try:
         holdings = kite.holdings() or []
+        holdings_ok = True
         for h in holdings:
             qty = int(h.get("quantity") or 0)
             if qty <= 0:
@@ -66,6 +79,7 @@ def _build_holdings_map(kite) -> dict[str, dict]:
 
     try:
         positions = (kite.positions() or {}).get("net", []) or []
+        positions_ok = True
         for p in positions:
             qty = int(p.get("quantity") or 0)
             if qty <= 0:
@@ -78,7 +92,7 @@ def _build_holdings_map(kite) -> dict[str, dict]:
     except Exception as e:
         log.warning(f"Could not fetch Kite positions: {e}")
 
-    return merged
+    return merged, holdings_ok, positions_ok
 
 
 def _pending_age_days(entry_time: str | None) -> int:
@@ -195,7 +209,33 @@ def reconcile_pending_trades() -> dict:
         )
         return summary
 
-    held = _build_holdings_map(kite)
+    held, holdings_ok, positions_ok = _build_holdings_map(kite)
+
+    if not (holdings_ok or positions_ok):
+        # Both calls failed even though the client itself was built fine —
+        # e.g. an expired token that constructs OK but rejects every real
+        # request. This is functionally the same failure as Kite being
+        # unreachable at all: we have zero visibility into the account, so
+        # fail closed the same way rather than let every LIVE row's "no
+        # match" look like a genuine absence.
+        log.error(f"Reconciler: both Kite holdings() and positions() failed — "
+                  f"leaving {len(live_pending)} LIVE row(s) PENDING for the next run.")
+        summary["skipped"] = True
+        _alert(
+            "Trade reconciliation did NOT run for LIVE trades",
+            f"Kite holdings() and positions() both failed, so nothing could be "
+            f"verified. {len(live_pending)} approved LIVE trade(s) remain PENDING "
+            f"and still count toward exposure. The next EOD run will retry."
+        )
+        return summary
+
+    snapshot_complete = holdings_ok and positions_ok
+    if not snapshot_complete:
+        missing = "holdings()" if not holdings_ok else "positions()"
+        log.warning(
+            f"Reconciler: Kite {missing} failed — this run's snapshot is "
+            f"incomplete. Unmatched LIVE rows will be deferred, not written off."
+        )
     if not held:
         log.warning("Reconciler: Kite returned no positions or holdings at all.")
 
@@ -228,8 +268,25 @@ def reconcile_pending_trades() -> dict:
             log.info(f"Reconciler: trade {trade_id} {key} -> CONFIRMED. {note}")
             continue
 
-        # LIVE row with no match. Give it a grace period before writing it off,
-        # so a settlement lag or a skipped run does not erase a real position.
+        if not snapshot_complete:
+            # We cannot tell "not found" from "couldn't check" this run. A
+            # real position must never be written off on unverified
+            # information — leave it PENDING regardless of age.
+            summary["deferred"] += 1
+            lines.append(
+                f"⚠️ UNVERIFIED  {exchange}:{ticker}  {want_qty} "
+                f"— Kite snapshot was incomplete this run, will re-check"
+            )
+            log.warning(
+                f"Reconciler: trade {trade_id} {key} not found, but this run's "
+                f"Kite snapshot was incomplete — leaving PENDING rather than "
+                f"risk writing off a real position."
+            )
+            continue
+
+        # LIVE row confirmed absent from a COMPLETE snapshot. Give it a grace
+        # period before writing it off, so a settlement lag or a skipped run
+        # does not erase a real position.
         age = _pending_age_days(trade.get("entry_time"))
         if age < MAX_PENDING_AGE_DAYS:
             summary["deferred"] += 1
