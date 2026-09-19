@@ -32,6 +32,8 @@ import hashlib
 import hmac
 import logging
 import os
+import sqlite3
+import time
 import requests as _requests
 from datetime import datetime
 
@@ -45,6 +47,15 @@ IST = pytz.timezone("Asia/Kolkata")
 ALERT_EMAIL     = os.getenv("ALERT_EMAIL", "")
 RAILWAY_URL     = os.getenv("RAILWAY_URL", "http://localhost:8080").rstrip("/")
 APPROVAL_SECRET = os.getenv("APPROVAL_SECRET", "")
+
+# How long an approve/reject link stays valid after the alert is sent. The
+# module docstring's "alert window = full trading day" plus the possibility
+# of acting on an evening alert the next morning argues for something well
+# past 24h; the real goal is just to bound how long a link keeps working —
+# forever was the bug — not to match the trading-day cutoff exactly (the
+# EOD sweep to NO_RESPONSE / the status guards below already close off
+# action on a signal the pipeline has moved past, independent of this TTL).
+APPROVAL_LINK_TTL_HOURS = float(os.getenv("APPROVAL_LINK_TTL_HOURS", "48"))
 
 # Secret embedded in diagnostic links (/status, /cycle_history) so those links
 # actually work when clicked from an email. The old templates hard-coded the
@@ -79,23 +90,39 @@ def _configured() -> bool:
     return True
 
 
-def _make_token(action: str, signal_id: int) -> str:
-    """HMAC-SHA256 token so approve/reject links can't be forged."""
-    msg = f"{action}:{signal_id}".encode()
+def _make_token(action: str, signal_id: int, expires_at: int) -> str:
+    """
+    HMAC-SHA256 token so approve/reject links can't be forged.
+
+    expires_at (unix seconds) is folded into the signed message, not just
+    checked separately, so a client can't extend its own link's life by
+    editing the exp= query param — any change to expires_at invalidates the
+    signature unless it's re-signed with APPROVAL_SECRET.
+    """
+    msg = f"{action}:{signal_id}:{expires_at}".encode()
     return hmac.new(APPROVAL_SECRET.encode(), msg, hashlib.sha256).hexdigest()
 
 
-def verify_token(action: str, signal_id: int, token: str) -> bool:
+def verify_token(action: str, signal_id: int, token: str, expires_at: int) -> bool:
     if not APPROVAL_SECRET:
         log.error("APPROVAL_SECRET is not set — refusing to verify any approve/reject token.")
         return False
-    expected = _make_token(action, signal_id)
-    return hmac.compare_digest(expected, token)
+    try:
+        expires_at = int(expires_at)
+    except (TypeError, ValueError):
+        return False
+    expected = _make_token(action, signal_id, expires_at)
+    if not hmac.compare_digest(expected, token):
+        return False
+    if time.time() > expires_at:
+        return False
+    return True
 
 
 def _action_url(action: str, signal_id: int) -> str:
-    token = _make_token(action, signal_id)
-    return f"{RAILWAY_URL}/email_action?action={action}&id={signal_id}&token={token}"
+    expires_at = int(time.time()) + int(APPROVAL_LINK_TTL_HOURS * 3600)
+    token = _make_token(action, signal_id, expires_at)
+    return f"{RAILWAY_URL}/email_action?action={action}&id={signal_id}&token={token}&exp={expires_at}"
 
 
 def _send_email(subject: str, html_body: str, plain_body: str = "") -> bool:
@@ -362,6 +389,29 @@ _STATUS_REFUSAL = {
     "DROPPED_NO_PRICE": "no live price could be fetched, so it was never sized",
     "DROPPED_SUBMIN": "the position came out below the minimum tradeable size",
 }
+
+# Reject had no equivalent guard at all: it unconditionally overwrote
+# signals.status to REJECTED regardless of what state the signal was
+# already in. Concretely, that meant a signal that was already EXECUTED
+# (a confirmed fill) or already REJECTED could be silently flipped back to
+# REJECTED by a stray or repeated tap — and, worse, a signal you had already
+# APPROVED (which opens a Kite basket and writes a PENDING trade row via
+# log_pending_trade) could be "rejected" afterward with nothing undoing that
+# trade row or whatever you may have already placed in Kite: the signal
+# would then read REJECTED while a live order might be in flight. Reject is
+# therefore intentionally NARROWER than approve's re-tappable set — it only
+# ever makes sense from PENDING (the normal case) or NOT_EXECUTED (the
+# reconciler found the order never reached the market, so declining a retry
+# is a real action) — never from APPROVED, where a trade record already
+# exists and rejecting can't retract it.
+_REJECTABLE_STATUSES = {"PENDING", "NOT_EXECUTED"}
+
+_REJECT_STATUS_REFUSAL = dict(_STATUS_REFUSAL)
+_REJECT_STATUS_REFUSAL["APPROVED"] = (
+    "you already approved this signal — a trade record was opened and you "
+    "may have already placed the order in Kite, so rejecting now would not "
+    "cancel it"
+)
 
 
 def handle_email_action(action: str, signal_id: int):
@@ -667,6 +717,37 @@ def handle_email_action(action: str, signal_id: int):
                 mode=approval_mode,
                 baseline_quantity=baseline_quantity,
             )
+        except sqlite3.IntegrityError:
+            # The double-approve guard above (get_live_trade_for_signal) and
+            # this insert are two separate statements, not one atomic check-
+            # and-write — so two approve requests racing for the same signal
+            # (a genuine double-tap of the confirm button, most plausibly)
+            # could both pass that check before either had inserted anything.
+            # idx_trades_one_live_per_signal (2026-09-19 review, item 8) is
+            # what actually stops the second one from writing a duplicate
+            # trade row; this just turns that into the same friendly message
+            # the upfront guard gives, instead of a raw ledger-failure error.
+            log.info(
+                f"Signal {signal_id}: lost a race to a concurrent approve — "
+                f"another request already recorded a live trade for it."
+            )
+            existing = get_live_trade_for_signal(signal_id)
+            if existing and _current_mode() != "PAPER":
+                basket_url = _build_kite_basket_url(ticker, exchange, direction, quantity)
+                return (
+                    f"This signal was already approved just now (trade "
+                    f"#{existing['id']}). Re-opening the same Kite basket; no "
+                    f"second position was recorded.",
+                    True,
+                    basket_url,
+                )
+            return (
+                f"This signal was already approved just now"
+                + (f" (trade #{existing['id']})" if existing else "")
+                + ". No second position was recorded.",
+                True,
+                None,
+            )
         except Exception as e:
             log.error(
                 f"Could not write PENDING trade for signal {signal_id}: {e}",
@@ -741,6 +822,31 @@ def handle_email_action(action: str, signal_id: int):
         )
 
     elif action == "reject":
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT status FROM signals WHERE id=?", (signal_id,)
+            ).fetchone()
+
+        if not row:
+            log.error(f"Signal {signal_id} not found in ledger")
+            return "Signal not found.", False, None
+
+        sig_status = (row["status"] or "").upper()
+        if sig_status not in _REJECTABLE_STATUSES:
+            reason = _REJECT_STATUS_REFUSAL.get(
+                sig_status, f"this signal is in state {sig_status}"
+            )
+            log.warning(
+                f"Refusing to reject signal {signal_id}: status={sig_status!r} "
+                f"is not rejectable."
+            )
+            return (
+                f"This signal cannot be rejected because {reason} "
+                f"(status: {sig_status}). The signal was left unchanged.",
+                False,
+                None,
+            )
+
         update_signal_response(signal_id, "REJECTED")
         log.info(f"Signal #{signal_id} rejected by user.")
         send_plain_email(

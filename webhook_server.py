@@ -26,6 +26,7 @@ Setup:
 import logging
 import os
 import threading
+import time
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
@@ -144,20 +145,71 @@ def _html_response(title: str, message: str, success: bool) -> str:
 </body></html>"""
 
 
-@app.route("/email_action", methods=["GET"])
+def _confirmation_html_response(action: str, signal_id: int, token: str, expires_at: int) -> str:
+    """
+    Read-only page shown on GET, before anything is executed. The user must
+    submit this page's form (a real POST, from a real tap) for the action to
+    actually happen — see the note on email_action() for why.
+    """
+    label = "Approve" if action == "approve" else "Reject"
+    color = "#16a34a" if action == "approve" else "#ef4444"
+    note = (
+        "This opens a Kite basket order for you to place yourself in Kite's "
+        "own app — nothing is bought automatically."
+        if action == "approve"
+        else "This marks the signal as rejected. No trade is placed."
+    )
+    return f"""<!DOCTYPE html>
+<html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Confirm {label}</title></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+             display:flex;align-items:center;justify-content:center;
+             min-height:100vh;margin:0;background:#f5f5f5">
+  <div style="background:#fff;border-radius:12px;padding:36px 28px;
+              text-align:center;max-width:360px;box-shadow:0 2px 12px rgba(0,0,0,.1)">
+    <h2 style="margin:0 0 8px;color:#333">{label} signal #{signal_id}?</h2>
+    <p style="color:#555;margin:0 0 20px">{note}</p>
+    <form method="POST" action="/email_action">
+      <input type="hidden" name="action" value="{action}">
+      <input type="hidden" name="id" value="{signal_id}">
+      <input type="hidden" name="token" value="{token}">
+      <input type="hidden" name="exp" value="{expires_at}">
+      <button type="submit" style="background:{color};color:#fff;border:none;
+              border-radius:8px;padding:14px 28px;font-size:16px;font-weight:600;
+              cursor:pointer">Confirm {label}</button>
+    </form>
+  </div>
+</body></html>"""
+
+
+@app.route("/email_action", methods=["GET", "POST"])
 def email_action():
     """
-    User taps Approve or Reject link in their Gmail.
-    Query params: action, id, token (HMAC-SHA256 signed with APPROVAL_SECRET).
+    GET:  the link the user taps in Gmail. Renders a read-only confirmation
+          page (see _confirmation_html_response) instead of acting straight
+          away. This matters because Gmail's own image/link-scanning proxy,
+          and corporate "Safe Links"-style scanners, fetch URLs found in an
+          email BEFORE any human clicks them — a GET that itself called
+          handle_email_action() meant those automated prefetches could
+          silently approve or reject real trades with nobody at the
+          keyboard. GET now only ever reads (it verifies the token so a
+          bad/expired link is reported immediately), never writes.
+    POST: submitted by tapping "Confirm" on that page. This is what actually
+          calls handle_email_action() and changes anything.
+    Params (query string on GET, form body on POST): action, id, token, exp
+    (exp is the unix-seconds expiry the token is signed against — see
+    alerts.gmail_alert._make_token / verify_token / APPROVAL_LINK_TTL_HOURS).
     """
     from flask import make_response
 
-    action    = request.args.get("action", "")
-    signal_id = request.args.get("id", "")
-    token     = request.args.get("token", "")
+    source = request.args if request.method == "GET" else request.form
+    action     = source.get("action", "")
+    signal_id  = source.get("id", "")
+    token      = source.get("token", "")
+    expires_at = source.get("exp", "")
 
     # Basic param validation
-    if action not in ("approve", "reject") or not signal_id or not token:
+    if action not in ("approve", "reject") or not signal_id or not token or not expires_at:
         html = _html_response("Invalid link", "This link is malformed or expired.", False)
         return make_response(html, 400)
 
@@ -167,12 +219,31 @@ def email_action():
         html = _html_response("Invalid link", "Signal ID is not valid.", False)
         return make_response(html, 400)
 
-    # Verify HMAC token
+    try:
+        expires_at = int(expires_at)
+    except ValueError:
+        html = _html_response("Invalid link", "This link is malformed or expired.", False)
+        return make_response(html, 400)
+
+    # Verify HMAC token (and expiry — see verify_token)
     from alerts.gmail_alert import verify_token, handle_email_action
-    if not verify_token(action, signal_id, token):
-        log.warning(f"Invalid token for action={action} id={signal_id}")
-        html = _html_response("Invalid token", "This link cannot be verified. It may have already been used or is corrupted.", False)
+    if not verify_token(action, signal_id, token, expires_at):
+        if expires_at < time.time():
+            log.warning(f"Expired token for action={action} id={signal_id}")
+            html = _html_response(
+                "Link expired",
+                "This approve/reject link has expired. Check the signal's "
+                "current status directly rather than re-sending the email.",
+                False,
+            )
+        else:
+            log.warning(f"Invalid token for action={action} id={signal_id}")
+            html = _html_response("Invalid token", "This link cannot be verified. It may have already been used or is corrupted.", False)
         return make_response(html, 403)
+
+    if request.method == "GET":
+        html = _confirmation_html_response(action, signal_id, token, expires_at)
+        return make_response(html, 200)
 
     log.info(f"Email action: {action} signal #{signal_id}")
 

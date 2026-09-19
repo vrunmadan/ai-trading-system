@@ -64,13 +64,67 @@ def _migrate_portfolio_peak_schema(conn) -> None:
     print("Migrated portfolio_peak to per-mode schema (existing peak kept as PAPER).")
 
 
+def _dedupe_duplicate_live_trades(conn) -> None:
+    """
+    Enforcing "at most one live trade per signal" as a DB constraint (see
+    idx_trades_one_live_per_signal below) fails outright if duplicates
+    already exist — and the exact race that constraint closes could already
+    have produced some, on a deployment that ran before this fix landed.
+
+    For each signal_id with more than one non-NOT_EXECUTED trade row, keep
+    the newest (highest id — the one the reconciler would have kept looking
+    at via get_trade_for_signal's own newest-first ordering) and demote the
+    rest to NOT_EXECUTED, the status this codebase already uses to mean
+    "does not represent a live position" (see get_live_trade_for_signal).
+    Nothing is deleted — the audit trail is kept, just reclassified — so
+    this is safe to run on every startup.
+    """
+    dupes = conn.execute(
+        """
+        SELECT signal_id FROM trades
+        WHERE signal_id IS NOT NULL AND fill_status != 'NOT_EXECUTED'
+        GROUP BY signal_id HAVING COUNT(*) > 1
+        """
+    ).fetchall()
+    for (signal_id,) in dupes:
+        ids = [
+            r[0] for r in conn.execute(
+                "SELECT id FROM trades WHERE signal_id=? AND fill_status != 'NOT_EXECUTED' "
+                "ORDER BY id DESC",
+                (signal_id,),
+            ).fetchall()
+        ]
+        for stale_id in ids[1:]:
+            conn.execute(
+                "UPDATE trades SET fill_status='NOT_EXECUTED', fill_note=? WHERE id=?",
+                (
+                    "Demoted: duplicate live trade row for the same signal, "
+                    "found and closed by the 2026-09-19 review item-8 "
+                    "uniqueness migration.",
+                    stale_id,
+                ),
+            )
+            print(f"Demoted duplicate trade #{stale_id} for signal #{signal_id} to NOT_EXECUTED.")
+    if dupes:
+        conn.commit()
+
+
 def init_db():
     """Create the database and tables from schema.sql. Safe to run multiple times."""
     os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
     with sqlite3.connect(DB_PATH) as conn:
-        with open(SCHEMA_PATH) as f:
-            conn.executescript(f.read())
-        # Idempotent migrations for existing Railway deployments
+        # These two steps run BEFORE schema.sql below, not after, because
+        # schema.sql now includes idx_trades_one_live_per_signal — a unique
+        # index on trades.signal_id (2026-09-19 review, item 8). Creating
+        # that index raises outright, aborting the rest of the script
+        # (executescript stops at the first error), if the trades table
+        # either lacks the fill_status column it filters on (a very old,
+        # pre-fill_status deployment) or already contains the duplicate
+        # live rows the index exists to prevent. Both are exactly the
+        # states an existing Railway deployment might be in, so both must
+        # be fixed up first. Neither step does anything on a brand-new DB —
+        # there is no trades table yet, so each ALTER/SELECT below simply
+        # raises "no such table", which is caught and skipped.
         for migration in [
             "ALTER TABLE signals ADD COLUMN exchange TEXT NOT NULL DEFAULT 'NSE'",
             "ALTER TABLE trades ADD COLUMN exchange TEXT NOT NULL DEFAULT 'NSE'",
@@ -87,6 +141,35 @@ def init_db():
                 conn.commit()
             except sqlite3.OperationalError:
                 pass  # Column already exists — normal on fresh init
+        try:
+            _dedupe_duplicate_live_trades(conn)
+        except sqlite3.OperationalError:
+            pass  # No trades table yet, or fill_status still missing — normal on fresh init
+
+        with open(SCHEMA_PATH) as f:
+            conn.executescript(f.read())
+
+        # Re-run the same migrations: a DB that had no trades table at all
+        # got it from schema.sql just above, with every column already
+        # correct, so these are no-ops there — but a DB that already HAD a
+        # trades table (the case the block above exists for) needs nothing
+        # further here either, since schema.sql's CREATE TABLE IF NOT
+        # EXISTS is a no-op for it. This second pass exists only so that
+        # re-ordering the two blocks in the future can't silently drop a
+        # migration; today it never does new work.
+        for migration in [
+            "ALTER TABLE signals ADD COLUMN exchange TEXT NOT NULL DEFAULT 'NSE'",
+            "ALTER TABLE trades ADD COLUMN exchange TEXT NOT NULL DEFAULT 'NSE'",
+            "ALTER TABLE trades ADD COLUMN fill_status TEXT NOT NULL DEFAULT 'CONFIRMED'",
+            "ALTER TABLE trades ADD COLUMN fill_note TEXT",
+            "ALTER TABLE signals ADD COLUMN price_at_signal REAL",
+            "ALTER TABLE trades ADD COLUMN baseline_quantity INTEGER NOT NULL DEFAULT 0",
+        ]:
+            try:
+                conn.execute(migration)
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass  # Column already exists
 
         _migrate_portfolio_peak_schema(conn)
 

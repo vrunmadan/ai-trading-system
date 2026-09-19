@@ -56,6 +56,20 @@ CREATE TABLE IF NOT EXISTS trades (
     baseline_quantity INTEGER NOT NULL DEFAULT 0
 );
 
+-- At most one "live" (i.e. not NOT_EXECUTED) trade row per signal. The
+-- application already enforced this in handle_email_action's double-approve
+-- guard (get_live_trade_for_signal, checked before log_pending_trade), but
+-- the check and the insert ran as two separate statements in two separate
+-- connections, so two approve requests racing for the same signal could
+-- both see "no existing trade" and both insert one — doubling recorded
+-- exposure for a single order (2026-09-19 review, item 8). This makes the
+-- invariant atomic: a second concurrent insert now fails at the database
+-- rather than silently succeeding. NOT_EXECUTED rows are excluded from the
+-- index on purpose, for the same reason get_live_trade_for_signal excludes
+-- them — a confirmed-dead attempt must never block a genuine retry.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_trades_one_live_per_signal
+    ON trades(signal_id) WHERE fill_status != 'NOT_EXECUTED';
+
 CREATE TABLE IF NOT EXISTS position_checks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     trade_id INTEGER REFERENCES trades(id),

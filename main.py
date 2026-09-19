@@ -419,17 +419,29 @@ def run_cycle() -> None:
     # ----------------------------------------------------------------
     try:
         signal_id = log_signal(signal, sizing, qc_verdict, price_at_signal=ltp)
-        update_signal_alert_sent(signal_id)
     except Exception as e:
         log.error(f"Ledger write failed: {e}", exc_info=True)
         return
 
+    # alert_sent_at is only recorded once send_trade_alert() has actually
+    # confirmed delivery. Marking it before the send (the old behavior) meant
+    # a signal that failed to send — Gmail API error, network blip, exception
+    # — was permanently indistinguishable from one the user actually received
+    # and silently missed: it looked "alerted" from the moment it was logged,
+    # regardless of whether the email ever left. Deferring the write to the
+    # success path makes alert_sent_at mean what its name says. It is
+    # write-only elsewhere in the codebase (nothing currently reads it to
+    # gate behavior), so this reordering changes nothing else.
     try:
         sent = send_trade_alert(signal_id, signal, qc_verdict, sizing, risk_flags=risk_flags)
         if sent:
+            update_signal_alert_sent(signal_id)
             log.info(f"Alert sent for signal #{signal_id} ({signal.ticker})")
         else:
-            log.error(f"Gmail alert failed for signal #{signal_id}")
+            log.error(
+                f"Gmail alert failed for signal #{signal_id} — "
+                "alert_sent_at left unset since delivery was not confirmed"
+            )
     except Exception as e:
         log.error(f"Gmail send failed: {e}", exc_info=True)
 

@@ -159,14 +159,14 @@ def test_those_links_actually_verify(ledger, signal, sizing, alert_env):
     html = spy.sent[0]["html"]
 
     for action in ("approve", "reject"):
-        m = re.search(rf"action={action}&id=7&token=([a-f0-9]+)", html)
+        m = re.search(rf"action={action}&id=7&token=([a-f0-9]+)&exp=(\d+)", html)
         assert m, f"no {action} token in the alert"
-        assert ga.verify_token(action, 7, m.group(1)) is True
+        assert ga.verify_token(action, 7, m.group(1), int(m.group(2))) is True
 
     # and a tampered token must not
-    m = re.search(r"action=approve&id=7&token=([a-f0-9]+)", html)
+    m = re.search(r"action=approve&id=7&token=([a-f0-9]+)&exp=(\d+)", html)
     bad = ("0" if m.group(1)[0] != "0" else "1") + m.group(1)[1:]
-    assert ga.verify_token("approve", 7, bad) is False
+    assert ga.verify_token("approve", 7, bad, int(m.group(2))) is False
 
 
 def test_approve_link_for_one_signal_does_not_work_on_another(
@@ -175,10 +175,11 @@ def test_approve_link_for_one_signal_does_not_work_on_another(
     ga, spy = alert_env
     ga.send_trade_alert(7, signal, _agree(), sizing)
     html = spy.sent[0]["html"]
-    token = re.search(r"action=approve&id=7&token=([a-f0-9]+)", html).group(1)
+    m = re.search(r"action=approve&id=7&token=([a-f0-9]+)&exp=(\d+)", html)
+    token, exp = m.group(1), int(m.group(2))
 
-    assert ga.verify_token("approve", 8, token) is False
-    assert ga.verify_token("reject", 7, token) is False
+    assert ga.verify_token("approve", 8, token, exp) is False
+    assert ga.verify_token("reject", 7, token, exp) is False
 
 
 def test_alert_includes_the_qc_verdict(ledger, signal, sizing, alert_env):
@@ -253,6 +254,108 @@ def test_agree_verdict_produces_an_actionable_alert_end_to_end(
     html = spy.sent[-1]["html"]
     assert "400 shares" in html
     assert "action=approve" in html and "action=reject" in html
+
+
+def _run_cycle_with_agree(ledger, signal, monkeypatch):
+    """Shared setup: drive main.run_cycle() to a clean AGREE alert."""
+    import main
+
+    import risk_manager.portfolio_risk as pr
+
+    class Status:
+        approved = True
+        halt_reason = ""
+
+    monkeypatch.setattr(pr, "check_portfolio_risk", lambda *a, **k: Status())
+
+    import researcher.regime_classifier as rc
+    from researcher.regime_classifier import Regime
+
+    class Reading:
+        regime = Regime.BULL
+        confidence = 80.0
+        rationale = "bull"
+
+    monkeypatch.setattr(rc, "classify_regime", lambda *a, **k: Reading())
+
+    import researcher.signal_generator as sg
+    monkeypatch.setattr(sg, "generate_signal", lambda *a, **k: signal)
+
+    import risk_sizer.sizer as sz
+    from risk_sizer.sizer import SizingDecision
+
+    monkeypatch.setattr(
+        sz, "size_position",
+        lambda **k: SizingDecision(True, 180_000.0, 0, "approved"),
+    )
+
+    import trader.kite_client as kc
+    monkeypatch.setattr(kc, "get_ltp", lambda *a, **k: 450.0)
+
+    import qc_factchecker.validator as qv
+    monkeypatch.setattr(qv, "validate_signal", lambda s: _agree())
+
+    main.run_cycle()
+
+
+def _alert_sent_at(ledger):
+    with ledger.get_db() as conn:
+        row = conn.execute("SELECT alert_sent_at FROM signals").fetchone()
+    return row["alert_sent_at"]
+
+
+def test_alert_sent_at_is_set_once_the_send_actually_succeeds(
+    ledger, signal, sizing, alert_env, monkeypatch
+):
+    """
+    2026-09-19 review, item 8: alert_sent_at used to be written right after
+    the ledger insert, before send_trade_alert() was even called — so it
+    recorded "we are about to try", not "we actually sent". The happy path
+    (this test) must still end up with alert_sent_at populated once the
+    send genuinely succeeds.
+    """
+    _run_cycle_with_agree(ledger, signal, monkeypatch)
+    assert _alert_sent_at(ledger) is not None
+
+
+def test_alert_sent_at_stays_unset_when_the_send_fails(
+    ledger, signal, sizing, alert_env, monkeypatch
+):
+    """
+    The actual bug: a signal whose email never went out (Gmail API error,
+    network blip, exception) was marked alert_sent_at anyway, because the
+    write happened before send_trade_alert() ran. That made a silently
+    un-alerted signal indistinguishable from one the user actually saw and
+    ignored. Now a failed/erroring send must leave alert_sent_at unset.
+    """
+    ga, spy = alert_env
+    monkeypatch.setattr(ga, "send_trade_alert", lambda *a, **k: False)
+
+    _run_cycle_with_agree(ledger, signal, monkeypatch)
+
+    # the signal row still exists (log_signal always runs)...
+    with ledger.get_db() as conn:
+        rows = [dict(r) for r in conn.execute("SELECT status FROM signals")]
+    assert len(rows) == 1
+    assert rows[0]["status"] == "PENDING"
+    # ...but alert_sent_at must NOT be populated, since delivery failed.
+    assert _alert_sent_at(ledger) is None
+
+
+def test_alert_sent_at_stays_unset_when_the_send_raises(
+    ledger, signal, sizing, alert_env, monkeypatch
+):
+    """Same as above, but for an exception rather than a False return."""
+    ga, spy = alert_env
+
+    def _boom(*a, **k):
+        raise RuntimeError("Gmail API is down")
+
+    monkeypatch.setattr(ga, "send_trade_alert", _boom)
+
+    _run_cycle_with_agree(ledger, signal, monkeypatch)
+
+    assert _alert_sent_at(ledger) is None
 
 
 def test_agree_does_not_trip_the_qc_error_streak(

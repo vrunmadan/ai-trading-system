@@ -111,16 +111,19 @@ def test_leaking_the_diagnostic_key_does_not_grant_trade_approval(monkeypatch):
     import alerts.gmail_alert as ga
     importlib.reload(ga)
     try:
-        real = ga._make_token("approve", 1)
-        assert ga.verify_token("approve", 1, real) is True
+        import time
+
+        exp = int(time.time()) + 3600
+        real = ga._make_token("approve", 1, exp)
+        assert ga.verify_token("approve", 1, real, exp) is True
 
         import hashlib
         import hmac as _hmac
 
         forged = _hmac.new(
-            b"diag-key", b"approve:1", hashlib.sha256
+            b"diag-key", f"approve:1:{exp}".encode(), hashlib.sha256
         ).hexdigest()
-        assert ga.verify_token("approve", 1, forged) is False
+        assert ga.verify_token("approve", 1, forged, exp) is False
     finally:
         importlib.reload(ga)
 
