@@ -24,11 +24,22 @@ Circuit breakers (all configurable via .env):
                            never build a position that trips this gate — see
                            the note in risk_sizer/sizer.py.
 
-Portfolio value tracked conservatively as:
-  TOTAL_CAPITAL_INR + sum(all realised P&L from closed trades)
+Portfolio value, for the drawdown circuit breaker, is:
+  TOTAL_CAPITAL_INR + all-time realised P&L + unrealised P&L on open positions
+
+The unrealised term is best-effort mark-to-market: each OpenPosition carries
+an optional market_value (quantity * live LTP, fetched by the caller before
+this gate runs). A position whose live price could not be fetched this cycle
+contributes 0 unrealised P&L rather than blocking the drawdown check — this
+is a documented approximation, not a silent one (2026-09-19 review, item 4:
+"Portfolio equity is configured capital plus realised P&L. Open losses and
+gains are absent" — a ₹10L account with ₹6L invested and those holdings
+down 20% had lost ₹1.2L that this gate could not see).
+
+This still does not account for fees, dividends, corporate actions or
+external cash flows — those need a fuller ledger and are out of scope here.
 
 Drawdown peak is stored in SQLite and updated whenever portfolio value increases.
-This avoids live price fetches in the risk gate (simpler and more reliable).
 """
 
 import logging
@@ -53,9 +64,10 @@ class PortfolioRiskStatus:
     approved: bool              # True → proceed; False → halt cycle
     halt_reason: str            # empty string if approved
 
-    portfolio_value: float      # CAPITAL + all-time realised P&L
+    portfolio_value: float      # CAPITAL + all-time realised P&L + unrealised P&L
     peak_value: float           # highest portfolio value ever reached
     drawdown_pct: float         # (value - peak) / peak * 100  — negative = loss
+    unrealized_pnl: float       # mark-to-market P&L on currently open positions
 
     deployed_capital: float     # sum of entry_price * qty for all open positions
     deployed_pct: float         # deployed_capital / CAPITAL * 100
@@ -96,7 +108,15 @@ def check_portfolio_risk(
     # Compute current portfolio value and drawdown
     # ----------------------------------------------------------------
     all_time_pnl   = get_all_time_pnl(mode)
-    portfolio_value = CAPITAL + all_time_pnl
+    # Mark-to-market: a position without a usable market_value this cycle
+    # contributes 0 unrealised P&L (see module docstring) rather than being
+    # excluded from CAPITAL or raising — the gate must still run.
+    unrealized_pnl = sum(
+        (p.market_value - p.capital_deployed)
+        for p in open_positions
+        if getattr(p, "market_value", None) is not None
+    )
+    portfolio_value = CAPITAL + all_time_pnl + unrealized_pnl
     peak_value      = get_update_portfolio_peak(portfolio_value, mode)  # updates if new high
     drawdown_pct    = ((portfolio_value - peak_value) / peak_value * 100) if peak_value > 0 else 0.0
 
@@ -167,6 +187,7 @@ def check_portfolio_risk(
         portfolio_value=portfolio_value,
         peak_value=peak_value,
         drawdown_pct=drawdown_pct,
+        unrealized_pnl=unrealized_pnl,
         deployed_capital=deployed_capital,
         deployed_pct=deployed_pct,
         weekly_pnl=weekly_pnl,
@@ -178,7 +199,8 @@ def check_portfolio_risk(
     if approved:
         log.info(
             f"Portfolio risk gate: OK | "
-            f"value ₹{portfolio_value:,.0f} | drawdown {drawdown_pct:.1f}% | "
+            f"value ₹{portfolio_value:,.0f} (unrealised ₹{unrealized_pnl:,.0f}) | "
+            f"drawdown {drawdown_pct:.1f}% | "
             f"deployed {deployed_pct:.1f}% | {open_count} positions | "
             f"week P&L ₹{weekly_pnl:,.0f}"
         )
@@ -204,7 +226,8 @@ def _send_halt_alert(status: PortfolioRiskStatus) -> None:
         msg = (
             f"🚨 Portfolio Risk Gate — HALTED\n\n"
             f"{status.halt_reason}\n\n"
-            f"Portfolio: ₹{status.portfolio_value:,.0f}  |  "
+            f"Portfolio: ₹{status.portfolio_value:,.0f} "
+            f"(unrealised ₹{status.unrealized_pnl:,.0f})  |  "
             f"Peak: ₹{status.peak_value:,.0f}  |  "
             f"Drawdown: {status.drawdown_pct:.1f}%\n"
             f"Deployed: {status.deployed_pct:.1f}%  |  "

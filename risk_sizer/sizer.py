@@ -56,7 +56,15 @@ MIN_POSITION_INR = float(os.getenv("MIN_POSITION_INR", 10_000))          # below
 class OpenPosition:
     ticker: str
     sector: str
-    capital_deployed: float  # INR currently at risk
+    capital_deployed: float  # INR at entry cost — what sizing/exposure math uses
+    # Best-effort current value of this position (quantity * live LTP), for
+    # marking the PORTFOLIO RISK GATE's drawdown to market rather than to
+    # entry cost. None when a live price could not be fetched for this
+    # position this cycle — the gate then assumes no unrealized swing for it
+    # (i.e. treats it as flat) rather than blocking the whole risk check on
+    # one stale quote (2026-09-19 review, item 4). Sizing decisions in this
+    # module are unaffected; they still size off capital_deployed.
+    market_value: float | None = None
 
 
 @dataclass

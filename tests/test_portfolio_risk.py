@@ -22,6 +22,7 @@ class _OpenPosition:
     ticker: str
     sector: str
     capital_deployed: float
+    market_value: float | None = None  # None = no live price this cycle (2026-09-19 review, item 4)
 
 
 @pytest.fixture(autouse=True)
@@ -160,3 +161,64 @@ class TestPeakTracking:
         status = check_portfolio_risk(open_positions=[], weekly_pnl=0.0, mode="PAPER")
         assert status.peak_value == 1_200_000.0
         assert status.portfolio_value == 950_000.0
+
+
+class TestMarkToMarketEquity:
+    """
+    2026-09-19 review, item 4: portfolio equity was configured capital plus
+    realised P&L only — open (unrealised) losses and gains on positions still
+    held were invisible to the drawdown circuit breaker. A ₹10L account with
+    ₹6L invested and those holdings down 20% had lost ₹1.2L that the old
+    calculation could not see at all.
+    """
+
+    def test_unrealised_loss_on_open_positions_counts_toward_drawdown(self, monkeypatch):
+        # Zero realised P&L — the OLD code would have shown 0% drawdown here.
+        mock_ledger(monkeypatch, all_time_pnl=0.0, peak_value=1_000_000.0)
+        # A ₹600,000 position (at cost) now worth ₹480,000 — a ₹120,000 open loss.
+        open_positions = [_OpenPosition("A", "Tech", 600_000.0, market_value=480_000.0)]
+        status = check_portfolio_risk(open_positions=open_positions, weekly_pnl=0.0, mode="PAPER")
+        assert status.unrealized_pnl == pytest.approx(-120_000.0)
+        assert status.portfolio_value == pytest.approx(880_000.0)
+        assert status.drawdown_pct == pytest.approx(-12.0)
+        assert status.approved is False
+        assert "DRAWDOWN" in status.halt_reason
+
+    def test_unrealised_gain_on_open_positions_raises_portfolio_value(self, monkeypatch):
+        mock_ledger(monkeypatch, all_time_pnl=0.0, peak_value=1_000_000.0)
+        open_positions = [_OpenPosition("A", "Tech", 200_000.0, market_value=250_000.0)]
+        status = check_portfolio_risk(open_positions=open_positions, weekly_pnl=0.0, mode="PAPER")
+        assert status.unrealized_pnl == pytest.approx(50_000.0)
+        assert status.portfolio_value == pytest.approx(1_050_000.0)
+        assert status.approved is True
+
+    def test_a_position_with_no_fetchable_price_is_treated_as_flat_not_excluded(self, monkeypatch):
+        """
+        market_value=None (a live LTP could not be fetched this cycle) must
+        not raise, and must not be treated as a ₹0 position — it simply
+        contributes no unrealised swing, the same as before this feature
+        existed.
+        """
+        mock_ledger(monkeypatch, all_time_pnl=0.0, peak_value=1_000_000.0)
+        open_positions = [_OpenPosition("A", "Tech", 300_000.0, market_value=None)]
+        status = check_portfolio_risk(open_positions=open_positions, weekly_pnl=0.0, mode="PAPER")
+        assert status.unrealized_pnl == 0.0
+        assert status.portfolio_value == pytest.approx(1_000_000.0)
+
+    def test_positions_without_a_market_value_attribute_at_all_still_work(self, monkeypatch):
+        """
+        Backward compatibility: an OpenPosition-like object predating this
+        field (no market_value attribute at all) must not crash
+        check_portfolio_risk — it is treated the same as market_value=None.
+        """
+        @dataclass
+        class _LegacyOpenPosition:
+            ticker: str
+            sector: str
+            capital_deployed: float
+
+        mock_ledger(monkeypatch, all_time_pnl=0.0, peak_value=1_000_000.0)
+        open_positions = [_LegacyOpenPosition("A", "Tech", 300_000.0)]
+        status = check_portfolio_risk(open_positions=open_positions, weekly_pnl=0.0, mode="PAPER")
+        assert status.unrealized_pnl == 0.0
+        assert status.portfolio_value == pytest.approx(1_000_000.0)

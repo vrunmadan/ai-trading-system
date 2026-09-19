@@ -528,20 +528,34 @@ def get_open_positions(mode: str | None = None) -> list[dict]:
 
 def get_weekly_pnl(mode: str | None = None) -> float:
     """
-    Sum of closed trade P&L since last Monday.
+    Sum of closed trade P&L since the start of the current week (Monday
+    00:00 IST).
+
+    Computed explicitly in Python rather than the old
+    date('now', 'weekday 1', '-7 days'): SQLite's "weekday 1" modifier is a
+    no-op when 'now' already falls on a Monday, so the unconditional
+    "-7 days" that followed landed on the PREVIOUS Monday instead of today's
+    — reproduced running on Monday 21 September 2026, which selected 14
+    September. It also measured "now" in UTC (SQLite's default), not IST, a
+    boundary error of up to ~5.5 hours that this codebase already treats as
+    a bug elsewhere (see the UTC/IST fix in get_cycle_log()). Deriving
+    "today" from IST directly fixes both at once (2026-09-19 review, item 4).
 
     mode: pass "PAPER" or "LIVE" to scope the weekly-loss circuit breaker to
     one book. None sums both (used only for the /status DB-connectivity
     check, which does not act on the number).
     """
+    today_ist = datetime.now(IST).date()
+    week_start = (today_ist - timedelta(days=today_ist.weekday())).isoformat()
+
     query = ("SELECT COALESCE(SUM(pnl), 0) as total "
              "FROM trades "
-             "WHERE exit_time >= date('now', 'weekday 1', '-7 days') "
+             "WHERE exit_time >= ? "
              "  AND pnl IS NOT NULL")
-    params: tuple = ()
+    params: tuple = (week_start,)
     if mode is not None:
         query += " AND mode = ?"
-        params = (mode,)
+        params = params + (mode,)
     with get_db() as conn:
         row = conn.execute(query, params).fetchone()
         return float(row["total"])

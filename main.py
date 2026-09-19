@@ -47,6 +47,28 @@ QC_ERROR_ALERT_THRESHOLD = int(os.getenv("QC_ERROR_ALERT_THRESHOLD", "3"))
 MIN_REGIME_CONFIDENCE = float(os.getenv("MIN_REGIME_CONFIDENCE", "0"))
 
 
+def _mark_to_market_value(ticker: str, exchange: str, quantity: int) -> float | None:
+    """
+    Best-effort current value of one open position, for feeding the
+    portfolio risk gate's mark-to-market drawdown check (2026-09-19 review,
+    item 4). Returns None — never raises, never blocks the cycle — if a live
+    price could not be fetched; the risk gate treats that as "no unrealised
+    swing assumed for this position" rather than as zero value.
+
+    Uses Kite's LTP endpoint, which is read-only market data and works the
+    same in PAPER and LIVE mode (see monitor.position_monitor, which already
+    relies on this for paper positions' stop checks).
+    """
+    try:
+        from trader.kite_client import get_ltp
+        return get_ltp(ticker, exchange) * quantity
+    except Exception as e:
+        log.warning(f"Could not fetch LTP for {exchange}:{ticker} to mark "
+                    f"the risk gate to market — treating it as flat this "
+                    f"cycle: {e}")
+        return None
+
+
 def _drop_candidate_before_qc(signal, sizing, status: str, price_at_signal: float | None = None) -> None:
     """A candidate cleared the 75% bar but was dropped BEFORE QC — at the Risk
     Sizer, the live-price fetch, or the minimum-size check.
@@ -120,6 +142,9 @@ def run_cycle() -> None:
                 ticker=p["ticker"],
                 sector=_universe_sector_map.get(p["ticker"], "Unknown"),
                 capital_deployed=float(p["entry_price"]) * int(p["quantity"]),
+                market_value=_mark_to_market_value(
+                    p["ticker"], p.get("exchange") or "NSE", int(p["quantity"])
+                ),
             )
             for p in raw_positions
         ]
