@@ -14,6 +14,30 @@ at signal creation. See TODO in schema.sql.
 
 Regime invalidation map: if you entered in BULL but the regime is now
 BEAR or CRASH, the thesis is gone — don't wait for the stop to be hit.
+
+Policy, made explicit (2026-09-19 review, item 6 asks that this choice be
+made deliberately and validated, rather than left as an implicit default):
+this is a CLOSE-BASED, once-daily policy. It checks once, at 15:35 IST —
+five minutes after NSE cash-equity trading closes at 15:30 — using the
+latest LTP as of that check. It does NOT monitor intraday, does NOT place
+broker-side protective (GTT/stop) orders, and does NOT track every intraday
+high for the trailing stop's peak — only the price seen at each daily check.
+Consequences that follow from that choice, and are NOT fixed by it:
+  - An intraday breach that recovers by 15:35 is invisible to this system.
+  - A gap through the stop (news overnight, a circuit) is not caught until
+    the next check sees the post-gap price; nothing here limits the loss to
+    the nominal stop distance.
+  - A PAPER exit is booked at the LTP observed at 15:35, which is NOT
+    evidence that a LIVE order could have achieved that price — it is only
+    the same policy's honest simulation of what THIS policy would have seen.
+  - This module's own timing/price assumptions are NOT currently mirrored by
+    streak_backtests/backtest.py, so backtest performance numbers should not
+    be read as validating this specific execution policy — see the review's
+    items 9 and 10 for that gap.
+An intraday-monitored alternative (broker protective orders, tick-level
+checks) would trade this module's simplicity for materially more
+infrastructure and is out of scope for this pass; if you want it, treat it
+as a separate, deliberate project rather than an incremental patch here.
 """
 
 import logging
@@ -135,7 +159,21 @@ def check_open_positions() -> None:
         from trader.kite_client import get_kite_client
         kite = get_kite_client()
     except Exception as e:
+        # This is not "nothing happened" — every open position's stop-loss
+        # and regime-invalidation check silently did not run today, for
+        # every position, PAPER and LIVE alike. A log line nobody is
+        # watching was previously the only trace of a day where stops went
+        # completely unmonitored (2026-09-19 review, item 6: "price-fetch
+        # failures must alert instead of silently skipping checks").
         log.error(f"Kite connection failed in monitor — skipping price checks: {e}")
+        _send_monitor_email(
+            f"🚨 Position monitor did NOT run — Kite unreachable\n{'─' * 40}\n"
+            f"Could not connect to Kite: {e}\n\n"
+            f"{len(open_positions)} open position(s) were NOT checked against "
+            f"a stop, a regime flip, or any other exit condition today. If "
+            f"this persists, stops for these positions are not being "
+            f"monitored at all."
+        )
         return
 
     alerts: list[str] = []
@@ -164,6 +202,18 @@ def check_open_positions() -> None:
             notes = f"Could not fetch LTP: {e}"
             log.error(f"{ticker}: {notes}")
             _log_position_check(trade_id, 0.0, "UNKNOWN", notes)
+            # A price-fetch failure means this position's stop and regime
+            # checks silently did not run today. Before this fix that fact
+            # only reached position_checks and the logs — if EVERY position
+            # failed this way, the "no alerts" branch below would report a
+            # clean, all-nominal day that never actually happened
+            # (2026-09-19 review, item 6).
+            alerts.append(
+                f"⚠️ {mode_tag}PRICE FETCH FAILED — {ticker}\n"
+                f"{notes}\n"
+                f"Stop-loss and regime checks did NOT run for this position "
+                f"today."
+            )
             continue
 
         pnl_pct = (current_price - entry_price) / entry_price * 100
