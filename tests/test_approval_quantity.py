@@ -142,10 +142,16 @@ def test_approve_refuses_when_quantity_is_missing(ledger, bad_quantity, monkeypa
 
 
 def test_approve_uses_the_real_quantity(ledger, monkeypatch):
-    """A properly sized signal produces a basket carrying that exact quantity."""
+    """A properly sized signal produces a basket carrying that exact quantity.
+
+    LIVE mode explicitly: this is testing that quantity flows through to the
+    real Kite basket payload, which only exists in LIVE now — PAPER approvals
+    no longer produce a basket URL at all (2026-09-19 review, item 1).
+    """
     db, _ = ledger
     monkeypatch.setenv("APPROVAL_SECRET", "test-secret")
     monkeypatch.setenv("KITE_API_KEY", "test-key")
+    monkeypatch.setenv("PAPER_MODE", "false")
 
     import alerts.gmail_alert as ga
 

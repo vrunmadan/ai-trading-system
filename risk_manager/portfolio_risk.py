@@ -72,23 +72,32 @@ class PortfolioRiskStatus:
 
 
 def check_portfolio_risk(
-    open_positions: list,   # list of OpenPosition from risk_sizer.sizer
-    weekly_pnl: float,      # from ledger.db.get_weekly_pnl()
+    open_positions: list,   # list of OpenPosition from risk_sizer.sizer,
+                             # already filtered to this mode by the caller
+    weekly_pnl: float,       # from ledger.db.get_weekly_pnl(mode=...)
+    mode: str,               # "PAPER" or "LIVE" — which book this gate protects
 ) -> PortfolioRiskStatus:
     """
     Evaluate all circuit breakers against the current portfolio state.
 
     Call this FIRST in run_cycle(). If status.approved is False, return
     immediately — do not classify regime or generate signals.
+
+    mode is required and threads through to get_all_time_pnl/
+    get_update_portfolio_peak so a live drawdown is never measured against
+    a paper high-water mark, or vice versa (2026-09-19 review, item 1/4).
     """
     from ledger.db import get_all_time_pnl, get_update_portfolio_peak
+
+    if mode not in ("PAPER", "LIVE"):
+        raise ValueError(f"mode must be 'PAPER' or 'LIVE', got {mode!r}")
 
     # ----------------------------------------------------------------
     # Compute current portfolio value and drawdown
     # ----------------------------------------------------------------
-    all_time_pnl   = get_all_time_pnl()
+    all_time_pnl   = get_all_time_pnl(mode)
     portfolio_value = CAPITAL + all_time_pnl
-    peak_value      = get_update_portfolio_peak(portfolio_value)  # updates if new high
+    peak_value      = get_update_portfolio_peak(portfolio_value, mode)  # updates if new high
     drawdown_pct    = ((portfolio_value - peak_value) / peak_value * 100) if peak_value > 0 else 0.0
 
     # ----------------------------------------------------------------

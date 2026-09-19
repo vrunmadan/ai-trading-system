@@ -445,6 +445,19 @@ def handle_email_action(action: str, signal_id: int):
         # exposure for a single order.
         existing = get_live_trade_for_signal(signal_id)
         if existing:
+            if _current_mode() == "PAPER":
+                log.info(
+                    f"Signal #{signal_id} already has trade #{existing['id']} "
+                    f"({existing.get('fill_status')}) — paper trade, nothing to "
+                    f"reopen; writing no second row."
+                )
+                return (
+                    f"This signal was already approved (trade #{existing['id']}, "
+                    f"{existing.get('fill_status')}). It's a paper trade — no real "
+                    f"order exists to reopen, and no second position was recorded.",
+                    True,
+                    None,
+                )
             log.info(
                 f"Signal #{signal_id} already has trade #{existing['id']} "
                 f"({existing.get('fill_status')}) — re-opening basket without "
@@ -487,8 +500,41 @@ def handle_email_action(action: str, signal_id: int):
                 None,
             )
 
-        # Intent is recorded; now mark the signal and hand off to Kite.
+        # Intent is recorded; now mark the signal.
         update_signal_response(signal_id, "APPROVED")
+
+        mode = _current_mode()
+
+        if mode == "PAPER":
+            # No real order screen, ever, for a paper approval. This is the
+            # fix for the critical bug in the 2026-09-19 review: a real,
+            # working Kite basket URL was being handed out for PAPER
+            # approvals too, so tapping it could place a genuine order that
+            # the rest of the system would go on treating as a simulation.
+            # The EOD reconciler (or its PAPER-only path, which does not
+            # even need Kite reachable) confirms this at the expected price.
+            log.info(
+                f"Signal #{signal_id} approved (PAPER) — trade #{trade_id} "
+                f"recorded PENDING ({direction} {quantity}×{exchange}:{ticker} "
+                f"@ ~₹{expected_price:,.2f}); no Kite order will be placed."
+            )
+            send_plain_email(
+                subject=f"📝 Paper trade recorded — {ticker} {direction} #{signal_id}",
+                body=(
+                    f"You approved signal #{signal_id}.\n"
+                    f"Paper trade recorded: {direction} {quantity} × {exchange}:{ticker} "
+                    f"@ ~₹{expected_price:,.2f}.\n\n"
+                    f"No real order was placed — this is a simulation. It will be "
+                    f"marked filled once reconciliation runs."
+                ),
+            )
+            return (
+                f"Paper trade recorded: {direction} {quantity} × {exchange}:{ticker} "
+                f"(trade #{trade_id}, pending fill simulation). No real order was placed.",
+                True,
+                None,
+            )
+
         log.info(
             f"Signal #{signal_id} approved — trade #{trade_id} recorded PENDING "
             f"({direction} {quantity}×{exchange}:{ticker} @ ~₹{expected_price:,.2f}); "

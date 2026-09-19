@@ -18,6 +18,52 @@ SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "schema.sql")
 IST = pytz.timezone("Asia/Kolkata")
 
 
+def current_mode() -> str:
+    """
+    PAPER or LIVE, read fresh from PAPER_MODE at call time so a config change
+    takes effect without a restart. This is meant to be the single source of
+    truth for which book is active — a previous incident (a confidence
+    threshold hardcoded in one place while an env var controlled another)
+    came from exactly this kind of duplicated, drifting config read.
+    """
+    return "PAPER" if os.getenv("PAPER_MODE", "true").lower() == "true" else "LIVE"
+
+
+def _migrate_portfolio_peak_schema(conn) -> None:
+    """
+    portfolio_peak used to be a single global row (id INTEGER PK CHECK id=1)
+    shared between PAPER and LIVE, so a live loss could offset a paper
+    high-water mark and vice versa. Rebuilds the table in place, keyed by
+    mode. The one existing peak is carried forward as PAPER (the only mode
+    this system has run in so far); LIVE starts fresh the first time
+    get_update_portfolio_peak(..., mode="LIVE") runs. Safe to call every
+    startup: a no-op once the table already has a mode column, and a no-op
+    on a brand-new DB where schema.sql already created the new shape.
+    """
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(portfolio_peak)").fetchall()]
+    if not cols or "mode" in cols:
+        return
+    old_row = conn.execute("SELECT peak_value, updated_at FROM portfolio_peak WHERE id=1").fetchone()
+    conn.execute("ALTER TABLE portfolio_peak RENAME TO portfolio_peak_legacy")
+    conn.execute(
+        """
+        CREATE TABLE portfolio_peak (
+            mode TEXT PRIMARY KEY CHECK (mode IN ('PAPER', 'LIVE')),
+            peak_value REAL NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    if old_row:
+        conn.execute(
+            "INSERT INTO portfolio_peak (mode, peak_value, updated_at) VALUES ('PAPER', ?, ?)",
+            (old_row[0], old_row[1]),
+        )
+    conn.execute("DROP TABLE portfolio_peak_legacy")
+    conn.commit()
+    print("Migrated portfolio_peak to per-mode schema (existing peak kept as PAPER).")
+
+
 def init_db():
     """Create the database and tables from schema.sql. Safe to run multiple times."""
     os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
@@ -40,6 +86,8 @@ def init_db():
                 conn.commit()
             except sqlite3.OperationalError:
                 pass  # Column already exists — normal on fresh init
+
+        _migrate_portfolio_peak_schema(conn)
 
         # One-time status backfill (safe to re-run; both statements are no-ops
         # once applied). See the signals.status vocabulary note below.
@@ -441,7 +489,7 @@ def close_trade(trade_id: int, exit_price: float):
 # Portfolio queries (used by Risk Sizer)
 # ---------------------------------------------------------------------------
 
-def get_open_positions() -> list[dict]:
+def get_open_positions(mode: str | None = None) -> list[dict]:
     """
     Trades that have an entry and no exit yet, excluding orders the reconciler
     established were never placed.
@@ -450,27 +498,42 @@ def get_open_positions() -> list[dict]:
     real exposure as far as the portfolio gate and the Risk Sizer are concerned,
     and treating it as such is what stops a batch of same-day approvals from
     each sizing as though the others did not exist.
+
+    mode: pass "PAPER" or "LIVE" to see only that book's exposure — any risk
+    or sizing decision must do this, since paper and live are not the same
+    money. Leave as None for an all-modes view (the position monitor, which
+    alerts on both books, and the Sheets mirror).
     """
+    query = ("SELECT * FROM trades "
+             "WHERE entry_price IS NOT NULL AND exit_price IS NULL "
+             "  AND fill_status != 'NOT_EXECUTED'")
+    params: tuple = ()
+    if mode is not None:
+        query += " AND mode = ?"
+        params = (mode,)
     with get_db() as conn:
-        rows = conn.execute(
-            "SELECT * FROM trades "
-            "WHERE entry_price IS NOT NULL AND exit_price IS NULL "
-            "  AND fill_status != 'NOT_EXECUTED'"
-        ).fetchall()
+        rows = conn.execute(query, params).fetchall()
         return [dict(r) for r in rows]
 
 
-def get_weekly_pnl() -> float:
-    """Sum of closed trade P&L since last Monday."""
+def get_weekly_pnl(mode: str | None = None) -> float:
+    """
+    Sum of closed trade P&L since last Monday.
+
+    mode: pass "PAPER" or "LIVE" to scope the weekly-loss circuit breaker to
+    one book. None sums both (used only for the /status DB-connectivity
+    check, which does not act on the number).
+    """
+    query = ("SELECT COALESCE(SUM(pnl), 0) as total "
+             "FROM trades "
+             "WHERE exit_time >= date('now', 'weekday 1', '-7 days') "
+             "  AND pnl IS NOT NULL")
+    params: tuple = ()
+    if mode is not None:
+        query += " AND mode = ?"
+        params = (mode,)
     with get_db() as conn:
-        row = conn.execute(
-            """
-            SELECT COALESCE(SUM(pnl), 0) as total
-            FROM trades
-            WHERE exit_time >= date('now', 'weekday 1', '-7 days')
-              AND pnl IS NOT NULL
-            """
-        ).fetchone()
+        row = conn.execute(query, params).fetchone()
         return float(row["total"])
 
 
@@ -808,32 +871,51 @@ def get_shadow_checks_for_signal_ids(signal_ids: list[int]) -> list[dict]:
 # Portfolio risk helpers (used by risk_manager/portfolio_risk.py)
 # ---------------------------------------------------------------------------
 
-def get_all_time_pnl() -> float:
-    """Sum of P&L from every closed trade ever (paper + live)."""
+def get_all_time_pnl(mode: str) -> float:
+    """
+    Sum of P&L from every closed trade ever, in ONE book.
+
+    mode is required and must be "PAPER" or "LIVE" — this number feeds the
+    drawdown circuit breaker, and silently summing both books together was
+    exactly the bug in the 2026-09-19 review: a live loss could offset a
+    paper high-water mark and vice versa.
+    """
+    if mode not in ("PAPER", "LIVE"):
+        raise ValueError(f"mode must be 'PAPER' or 'LIVE', got {mode!r}")
     with get_db() as conn:
         row = conn.execute(
-            "SELECT COALESCE(SUM(pnl), 0) AS total FROM trades WHERE pnl IS NOT NULL"
+            "SELECT COALESCE(SUM(pnl), 0) AS total FROM trades "
+            "WHERE pnl IS NOT NULL AND mode = ?",
+            (mode,),
         ).fetchone()
         return float(row["total"])
 
 
-def get_update_portfolio_peak(current_value: float) -> float:
+def get_update_portfolio_peak(current_value: float, mode: str) -> float:
     """
-    Returns the all-time peak portfolio value.
-    If current_value is a new high, updates the stored peak and returns it.
+    Returns the all-time peak portfolio value for ONE book (PAPER or LIVE).
+    If current_value is a new high for that book, updates its stored peak.
+
+    mode is required for the same reason as get_all_time_pnl: a shared peak
+    let one book's drawdown recovery paper over the other book's losing
+    streak.
     """
+    if mode not in ("PAPER", "LIVE"):
+        raise ValueError(f"mode must be 'PAPER' or 'LIVE', got {mode!r}")
     with get_db() as conn:
-        row = conn.execute("SELECT peak_value FROM portfolio_peak WHERE id = 1").fetchone()
+        row = conn.execute(
+            "SELECT peak_value FROM portfolio_peak WHERE mode = ?", (mode,)
+        ).fetchone()
         peak = float(row["peak_value"]) if row else current_value
         if current_value >= peak:
             conn.execute(
                 """
-                INSERT INTO portfolio_peak (id, peak_value, updated_at)
-                VALUES (1, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET peak_value=excluded.peak_value,
-                                              updated_at=excluded.updated_at
+                INSERT INTO portfolio_peak (mode, peak_value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(mode) DO UPDATE SET peak_value=excluded.peak_value,
+                                                updated_at=excluded.updated_at
                 """,
-                (current_value, now_ist()),
+                (mode, current_value, now_ist()),
             )
             return current_value
         return peak

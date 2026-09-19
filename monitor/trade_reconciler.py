@@ -100,7 +100,8 @@ def _pending_age_days(entry_time: str | None) -> int:
 
 def reconcile_pending_trades() -> dict:
     """
-    Reconcile every PENDING trade against Kite.
+    Reconcile every PENDING trade. PAPER rows are simulated unconditionally;
+    LIVE rows are checked against Kite.
 
     Returns a summary dict: {"pending": n, "confirmed": n, "not_executed": n,
     "deferred": n, "skipped": bool}. Never raises — a reconciliation failure
@@ -123,22 +124,73 @@ def reconcile_pending_trades() -> dict:
         log.info("Reconciler: no PENDING trades.")
         return summary
 
-    log.info(f"Reconciler: {len(pending)} PENDING trade(s) to check against Kite.")
+    lines: list[str] = []
+
+    # PAPER rows first, and unconditionally — checked BEFORE any Kite lookup
+    # and regardless of whether Kite is even reachable. A paper approval is a
+    # simulation: no order was ever sent, so there is nothing in Kite that
+    # could legitimately confirm it, and nothing there should ever be allowed
+    # to. Before this fix, a PAPER row was matched against Kite FIRST, so a
+    # coincidental real holding under the same ticker/exchange — the user's
+    # own pre-existing position, or (before the approval-side fix) a real
+    # order placed through a paper-mode approval link — would be adopted as
+    # the "confirmed" fill, and the real holding could later be closed by a
+    # simulation while it stayed open at the broker (2026-09-19 review, item 1).
+    live_pending = []
+    for trade in pending:
+        if (trade.get("mode") or "PAPER").upper() != "PAPER":
+            live_pending.append(trade)
+            continue
+        trade_id = trade["id"]
+        ticker = trade["ticker"]
+        exchange = trade.get("exchange") or "NSE"
+        want_qty = int(trade["quantity"])
+        sim_price = float(trade["entry_price"] or 0.0)
+        note = (
+            f"Simulated fill at ₹{sim_price:,.2f} (PAPER mode — no order "
+            f"was placed, so nothing was verified against Kite)."
+        )
+        confirm_trade(trade_id, sim_price, note=note)
+        _promote_signal(trade, mark_signal_executed)
+        summary["confirmed"] += 1
+        summary["simulated"] += 1
+        lines.append(
+            f"📝 SIMULATED  {exchange}:{ticker}  {want_qty} @ "
+            f"₹{sim_price:,.2f}  (paper)"
+        )
+        log.info(f"Reconciler: trade {trade_id} {_position_key(exchange, ticker)} "
+                 f"-> CONFIRMED (simulated).")
+
+    if not live_pending:
+        log.info(f"Reconciler: {summary['simulated']} paper trade(s) simulated, "
+                 f"no LIVE trades to check against Kite.")
+        if lines:
+            _alert(
+                f"Trade reconciliation — {summary['confirmed']} confirmed, "
+                f"{summary['not_executed']} not placed",
+                "Daily reconciliation of approved trades\n"
+                + "─" * 40 + "\n" + "\n".join(lines),
+            )
+        return summary
+
+    log.info(f"Reconciler: {len(live_pending)} LIVE PENDING trade(s) to check against Kite.")
 
     try:
         from trader.kite_client import get_kite_client
 
         kite = get_kite_client()
     except Exception as e:
-        # Fail closed: leave rows PENDING so the next run retries. Marking them
-        # NOT_EXECUTED here would silently erase real exposure.
-        log.error(f"Reconciler: cannot reach Kite — leaving {len(pending)} row(s) "
-                  f"PENDING for the next run: {e}")
+        # Fail closed: leave LIVE rows PENDING so the next run retries. Marking
+        # them NOT_EXECUTED here would silently erase real exposure. This must
+        # not affect the PAPER rows already simulated above — a Kite outage
+        # has nothing to do with paper trading and must not stall it.
+        log.error(f"Reconciler: cannot reach Kite — leaving {len(live_pending)} LIVE "
+                  f"row(s) PENDING for the next run: {e}")
         summary["skipped"] = True
         _alert(
-            "Trade reconciliation did NOT run",
-            f"{len(pending)} approved trade(s) could not be verified against Kite "
-            f"({e}).\n\nThey remain PENDING and still count toward exposure. "
+            "Trade reconciliation did NOT run for LIVE trades",
+            f"{len(live_pending)} approved LIVE trade(s) could not be verified against "
+            f"Kite ({e}).\n\nThey remain PENDING and still count toward exposure. "
             f"The next EOD run will retry."
         )
         return summary
@@ -147,9 +199,7 @@ def reconcile_pending_trades() -> dict:
     if not held:
         log.warning("Reconciler: Kite returned no positions or holdings at all.")
 
-    lines: list[str] = []
-
-    for trade in pending:
+    for trade in live_pending:
         trade_id = trade["id"]
         ticker = trade["ticker"]
         exchange = trade.get("exchange") or "NSE"
@@ -176,29 +226,6 @@ def reconcile_pending_trades() -> dict:
                 f"₹{fill_price:,.2f}" + ("  (PARTIAL FILL)" if partial else "")
             )
             log.info(f"Reconciler: trade {trade_id} {key} -> CONFIRMED. {note}")
-            continue
-
-        # No match in Kite. A PAPER row is a simulation — no order was ever
-        # sent, so there is nothing to find and nothing to write off. Confirm
-        # it as a simulated fill at the expected price, otherwise every paper
-        # trade would age out to NOT_EXECUTED and the round trip could never
-        # complete. (A PAPER row that IS found in Kite is handled above: the
-        # user placed the basket for real, and the real fill wins.)
-        if (trade.get("mode") or "PAPER").upper() == "PAPER":
-            sim_price = float(trade["entry_price"] or 0.0)
-            note = (
-                f"Simulated fill at \u20b9{sim_price:,.2f} (PAPER mode — no order "
-                f"was placed, so nothing was verified against Kite)."
-            )
-            confirm_trade(trade_id, sim_price, note=note)
-            _promote_signal(trade, mark_signal_executed)
-            summary["confirmed"] += 1
-            summary["simulated"] += 1
-            lines.append(
-                f"\U0001f4dd SIMULATED  {exchange}:{ticker}  {want_qty} @ "
-                f"\u20b9{sim_price:,.2f}  (paper)"
-            )
-            log.info(f"Reconciler: trade {trade_id} {key} -> CONFIRMED (simulated).")
             continue
 
         # LIVE row with no match. Give it a grace period before writing it off,

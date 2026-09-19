@@ -108,7 +108,10 @@ def test_approve_writes_pending_trade_with_real_quantity(ledger, monkeypatch):
     sid = _insert_signal(db, quantity=400, capital=180_000.0)
     _, ok, url = ga.handle_email_action("approve", sid)
 
-    assert ok is True and url is not None
+    # PAPER (the default here) never returns a real basket URL — see
+    # test_paper_row_is_never_confirmed_from_a_real_kite_holding below and
+    # the 2026-09-19 review, item 1.
+    assert ok is True and url is None
 
     trades = db.get_open_positions()
     assert len(trades) == 1
@@ -155,8 +158,8 @@ def test_second_approve_does_not_write_a_second_row(ledger, monkeypatch):
     ga.handle_email_action("approve", sid)
     msg, ok, url = ga.handle_email_action("approve", sid)
 
-    assert ok is True          # still redirects, so the user is not stranded
-    assert url is not None
+    assert ok is True
+    assert url is None          # PAPER: no real basket ever existed to reopen
     assert "already approved" in msg.lower()
     assert len(db.get_open_positions()) == 1
 
@@ -197,7 +200,7 @@ def _approve_live(db, monkeypatch, **kw):
 
 def test_reconcile_confirms_from_positions_with_real_average_price(ledger, monkeypatch):
     db = ledger
-    trade = _approve(db, monkeypatch)
+    trade = _approve_live(db, monkeypatch)
 
     _use_kite(monkeypatch, FakeKite(positions=[
         {"tradingsymbol": "ACME", "exchange": "NSE",
@@ -218,7 +221,7 @@ def test_reconcile_confirms_from_positions_with_real_average_price(ledger, monke
 
 def test_reconcile_confirms_from_holdings_when_not_in_positions(ledger, monkeypatch):
     db = ledger
-    trade = _approve(db, monkeypatch)
+    trade = _approve_live(db, monkeypatch)
 
     _use_kite(monkeypatch, FakeKite(holdings=[
         {"tradingsymbol": "ACME", "exchange": "NSE",
@@ -235,7 +238,7 @@ def test_reconcile_confirms_from_holdings_when_not_in_positions(ledger, monkeypa
 
 def test_reconcile_records_a_partial_fill(ledger, monkeypatch):
     db = ledger
-    trade = _approve(db, monkeypatch)
+    trade = _approve_live(db, monkeypatch)
 
     _use_kite(monkeypatch, FakeKite(positions=[
         {"tradingsymbol": "ACME", "exchange": "NSE",
@@ -254,7 +257,7 @@ def test_reconcile_records_a_partial_fill(ledger, monkeypatch):
 def test_reconcile_never_claims_more_than_it_asked_for(ledger, monkeypatch):
     """A larger Kite holding means the user already owned some. Not ours."""
     db = ledger
-    trade = _approve(db, monkeypatch, quantity=100, capital=45_000.0)
+    trade = _approve_live(db, monkeypatch, quantity=100, capital=45_000.0)
 
     _use_kite(monkeypatch, FakeKite(holdings=[
         {"tradingsymbol": "ACME", "exchange": "NSE",
@@ -368,9 +371,10 @@ def test_reconcile_is_a_noop_with_nothing_pending(ledger, monkeypatch):
 def test_confirmed_trade_closes_and_feeds_pnl_back_to_the_risk_gate(
     ledger, monkeypatch
 ):
-    """The round trip the whole hybrid exists to enable."""
+    """The round trip the whole hybrid exists to enable (LIVE: confirmed
+    from a real Kite fill, then closed)."""
     db = ledger
-    trade = _approve(db, monkeypatch)
+    trade = _approve_live(db, monkeypatch)
 
     _use_kite(monkeypatch, FakeKite(positions=[
         {"tradingsymbol": "ACME", "exchange": "NSE",
@@ -383,7 +387,7 @@ def test_confirmed_trade_closes_and_feeds_pnl_back_to_the_risk_gate(
     db.close_trade(row["id"], exit_price=418.50)     # -7% stop
 
     assert db.get_open_positions() == []
-    assert db.get_all_time_pnl() == pytest.approx((418.50 - 450.0) * 400)
+    assert db.get_all_time_pnl("LIVE") == pytest.approx((418.50 - 450.0) * 400)
 
 
 # ---------------------------------------------------------------------------
@@ -414,12 +418,16 @@ def test_paper_trade_is_confirmed_as_a_simulated_fill(ledger, monkeypatch):
     assert len(db.get_open_positions()) == 1
 
 
-def test_paper_trade_found_in_kite_uses_the_real_fill_not_the_simulation(
+def test_paper_row_is_never_confirmed_from_a_real_kite_holding(
     ledger, monkeypatch
 ):
     """
-    PAPER_MODE does not currently gate the approval path, so a paper-tagged
-    signal can still be placed for real. If Kite has it, the truth wins.
+    Regression test for the 2026-09-19 review, item 1: a PAPER row must never
+    be confirmed from whatever Kite happens to hold under the same
+    ticker/exchange — the user's own pre-existing personal holding, or (before
+    the approval-side fix) a real order accidentally placed through a
+    paper-mode approval link. A paper approval is a simulation; the real
+    market is irrelevant to it, full stop.
     """
     db = ledger
     trade = _approve(db, monkeypatch)                    # PAPER
@@ -432,18 +440,39 @@ def test_paper_trade_found_in_kite_uses_the_real_fill_not_the_simulation(
     from monitor.trade_reconciler import reconcile_pending_trades
     summary = reconcile_pending_trades()
 
-    assert summary["simulated"] == 0
+    assert summary["simulated"] == 1
     row = db.get_trade_for_signal(trade["signal_id"])
-    assert row["entry_price"] == pytest.approx(461.20)
-    assert "simulated" not in (row["fill_note"] or "").lower()
+    assert row["entry_price"] == pytest.approx(450.0)      # the simulated/expected price
+    assert row["entry_price"] != pytest.approx(461.20)     # NOT the coincidental real fill
+    assert "simulated" in (row["fill_note"] or "").lower()
 
 
-def _confirmed_paper_position(db, monkeypatch, entry=450.0):
-    trade = _approve(db, monkeypatch)
-    _use_kite(monkeypatch, FakeKite(positions=[
-        {"tradingsymbol": "ACME", "exchange": "NSE",
-         "quantity": 400, "average_price": entry},
-    ]))
+def test_paper_reconciliation_does_not_need_kite(ledger, monkeypatch):
+    """
+    A Kite outage must not stall paper trading — PAPER rows need nothing
+    from the broker, so they must simulate even when Kite is completely
+    unreachable (2026-09-19 review, item 1).
+    """
+    db = ledger
+    trade = _approve(db, monkeypatch)                    # PAPER
+
+    import trader.kite_client as kc
+    monkeypatch.setattr(
+        kc, "get_kite_client",
+        lambda: (_ for _ in ()).throw(RuntimeError("kite down")),
+    )
+
+    from monitor.trade_reconciler import reconcile_pending_trades
+    summary = reconcile_pending_trades()
+
+    assert summary["simulated"] == 1
+    assert summary["skipped"] is False
+    row = db.get_trade_for_signal(trade["signal_id"])
+    assert row["fill_status"] == "CONFIRMED"
+
+
+def _confirmed_paper_position(db, monkeypatch, entry=450.0, quantity=400):
+    trade = _approve(db, monkeypatch, quantity=quantity, capital=entry * quantity)
     from monitor.trade_reconciler import reconcile_pending_trades
     reconcile_pending_trades()
     return db.get_trade_for_signal(trade["signal_id"])
@@ -488,7 +517,7 @@ def test_paper_position_is_closed_when_the_stop_triggers(ledger, monkeypatch):
     assert closed["pnl"] == pytest.approx((410.0 - 450.0) * 400)
     assert db.get_open_positions() == []
     # and the portfolio gate can finally see a real number
-    assert db.get_all_time_pnl() == pytest.approx(-16_000.0)
+    assert db.get_all_time_pnl("PAPER") == pytest.approx(-16_000.0)
 
 
 def test_paper_position_is_left_open_while_the_thesis_holds(ledger, monkeypatch):
@@ -498,7 +527,7 @@ def test_paper_position_is_left_open_while_the_thesis_holds(ledger, monkeypatch)
     _run_monitor(monkeypatch, ltp=470.0)                  # up, nothing triggered
 
     assert len(db.get_open_positions()) == 1
-    assert db.get_all_time_pnl() == 0.0
+    assert db.get_all_time_pnl("PAPER") == 0.0
 
 
 def test_paper_position_closes_at_the_observed_price_not_the_stop_line(

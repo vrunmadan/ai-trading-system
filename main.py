@@ -108,7 +108,8 @@ def run_cycle() -> None:
         from risk_manager.portfolio_risk import check_portfolio_risk
         from universe.loader import load_universe
 
-        raw_positions = get_open_positions()
+        cycle_mode = "PAPER" if PAPER_MODE else "LIVE"
+        raw_positions = get_open_positions(mode=cycle_mode)
         try:
             _universe_sector_map = {e.ticker: e.sector for e in load_universe()}
         except Exception:
@@ -122,8 +123,10 @@ def run_cycle() -> None:
             )
             for p in raw_positions
         ]
-        weekly_pnl_early = get_weekly_pnl()
-        portfolio_status = check_portfolio_risk(open_positions_for_risk, weekly_pnl_early)
+        weekly_pnl_early = get_weekly_pnl(mode=cycle_mode)
+        portfolio_status = check_portfolio_risk(
+            open_positions_for_risk, weekly_pnl_early, mode=cycle_mode
+        )
 
         # Advisory flags (exposure / sector / position count) never halt the
         # cycle — they ride along on the alert so the user sees the context and

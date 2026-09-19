@@ -59,8 +59,8 @@ def _run_cycle_with_drawdown_halt(monkeypatch, signal, ltp=450.0, ltp_raises=Fal
     monkeypatch.setattr(main, "PAPER_MODE", True, raising=False)
 
     import ledger.db as db
-    monkeypatch.setattr(db, "get_open_positions", lambda: [])
-    monkeypatch.setattr(db, "get_weekly_pnl", lambda: -50_000.0)
+    monkeypatch.setattr(db, "get_open_positions", lambda mode=None: [])
+    monkeypatch.setattr(db, "get_weekly_pnl", lambda mode=None: -50_000.0)
 
     import universe.loader as ul
     monkeypatch.setattr(ul, "load_universe", lambda: [])

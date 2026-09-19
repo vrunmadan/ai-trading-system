@@ -186,7 +186,16 @@ def email_action():
             log.info(f"Redirecting to Kite basket: {kite_url[:80]}...")
             return flask_redirect(kite_url, code=302)
 
-        title = ("Signal rejected" if action == "reject" else "Action failed") if success else "Action failed"
+        # A successful non-redirect approve (e.g. a PAPER trade, which never
+        # returns a kite_url) fell into "Action failed" here even though
+        # success was True — this only worked before because every successful
+        # approve redirected instead of reaching this line.
+        if not success:
+            title = "Action failed"
+        elif action == "reject":
+            title = "Signal rejected"
+        else:
+            title = "Trade recorded"
         html = _html_response(title, message, success)
         return make_response(html, 200 if success else 500)
     except Exception as e:

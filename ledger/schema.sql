@@ -112,9 +112,12 @@ CREATE TABLE IF NOT EXISTS signal_shadow_checks (
 );
 
 -- Portfolio peak tracking for drawdown circuit breaker.
--- Only ever has ONE row (upserted each cycle).
+-- One row per mode (PAPER / LIVE) — paper and live are different books with
+-- different money, so a live drawdown must never be measured against a peak
+-- that paper trading built, or vice versa. See ledger/db.py:current_mode()
+-- and the 2026-09-19 review, item 1.
 CREATE TABLE IF NOT EXISTS portfolio_peak (
-    id INTEGER PRIMARY KEY CHECK (id = 1),  -- enforces single row
+    mode TEXT PRIMARY KEY CHECK (mode IN ('PAPER', 'LIVE')),
     peak_value REAL NOT NULL,
     updated_at TEXT NOT NULL
 );
