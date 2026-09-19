@@ -251,10 +251,23 @@ def execute_trade(
     exchange: str = "NSE",
 ) -> ExecutionResult:
     """
-    Main entry point called by the email approval webhook.
+    DORMANT — not called anywhere in the live approval flow (see
+    alerts.gmail_alert.handle_email_action, which builds a Kite basket URL
+    directly and never reaches this function). Do not wire this in without
+    first fixing its LIVE branch below: it calls log_trade(..., mode="LIVE")
+    with the default fill_status="CONFIRMED", i.e. it records order
+    SUBMISSION as a confirmed FILL, before any verification that the order
+    actually executed. That is exactly the failure mode the 2026-09-19
+    review's items 1 and 3 fixed the real approval path away from (PENDING
+    until the EOD reconciler confirms against Kite) — reviving this function
+    as-is would silently reintroduce it. If a future need calls for this
+    function, route its LIVE branch through log_pending_trade() + the
+    reconciler instead of log_trade(..., fill_status="CONFIRMED").
 
+    Intended flow, if fixed and wired in:
     1. Re-fetches live LTP (price may have moved since signal was generated)
-    2. Runs microstructure checks
+    2. Runs microstructure checks (approval now calls these directly instead —
+       see handle_email_action, 2026-09-19 review item 7)
     3. Computes share quantity from LTP
     4. Places order (or logs it in PAPER_MODE)
     5. Logs to ledger

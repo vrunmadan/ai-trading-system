@@ -549,6 +549,7 @@ def handle_email_action(action: str, signal_id: int):
             try:
                 from trader.kite_client import get_ltp
                 current_price = get_ltp(ticker, exchange)
+                kite_reachable_this_cycle = True
             except Exception as e:
                 log.warning(
                     f"Could not refresh a live price for {exchange}:{ticker} "
@@ -556,6 +557,7 @@ def handle_email_action(action: str, signal_id: int):
                     f"generation-time price instead: {e}"
                 )
                 current_price = generation_price
+                kite_reachable_this_cycle = False
 
             # Shrink (never grow) quantity to what the — possibly reduced —
             # capital actually buys at the — possibly refreshed — price.
@@ -588,6 +590,49 @@ def handle_email_action(action: str, signal_id: int):
                     False,
                     None,
                 )
+
+            # Liquidity / circuit-proximity / order-impact preflight, right
+            # before the real handoff (2026-09-19 review, item 7). These
+            # checks already existed (circuit buffer, 20d turnover, ADV%) in
+            # trader.kite_client.microstructure_checks(), but that function
+            # is only ever called from execute_trade() — which is DORMANT
+            # and unreachable from this approval flow (see its own warning
+            # docstring) — so approval never ran them at all. Reusing just
+            # the checks, not execute_trade itself (which has its own known
+            # bug: it records a fill before verifying execution — exactly
+            # what this review's items 1/3 fixed the approval path to never
+            # do), closes that gap without introducing any automatic
+            # execution. Only runs when Kite was actually reachable this
+            # cycle: if it was down, the price refresh above already fell
+            # back rather than blocking, and running a check that would
+            # fail for the same reason would just block on unavailability
+            # rather than on an actual finding.
+            if kite_reachable_this_cycle:
+                try:
+                    from trader.kite_client import microstructure_checks
+                    checks_ok, check_note = microstructure_checks(
+                        ticker, capital_to_deploy, exchange
+                    )
+                except Exception as e:
+                    log.warning(
+                        f"Preflight microstructure check errored for "
+                        f"{exchange}:{ticker} on signal {signal_id} — "
+                        f"proceeding without it: {e}"
+                    )
+                    checks_ok, check_note = True, ""
+
+                if not checks_ok:
+                    log.warning(
+                        f"Refusing to approve signal {signal_id}: preflight "
+                        f"check failed for {exchange}:{ticker}: {check_note}"
+                    )
+                    return (
+                        f"Preflight check failed for {ticker}: {check_note} "
+                        f"No Kite basket was opened; the signal was left "
+                        f"unchanged.",
+                        False,
+                        None,
+                    )
         else:
             expected_price = generation_price
 

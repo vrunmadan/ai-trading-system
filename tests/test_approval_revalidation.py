@@ -84,13 +84,28 @@ def _live(monkeypatch):
 
 
 class FakeKite:
-    """Only what get_ltp() calls."""
+    """
+    What get_ltp() calls (.ltp), plus what the item-7 microstructure
+    preflight calls (.quote) whenever the price refresh succeeds — healthy
+    enough (a wide circuit buffer) to never trip that check on its own, so
+    these fakes model "Kite reachable, price fetched" without also having to
+    model liquidity data for every test.
+    """
 
     def __init__(self, price):
         self.price = price
 
     def ltp(self, key):
         return {key: {"last_price": self.price}}
+
+    def quote(self, key):
+        return {
+            key: {
+                "last_price": self.price,
+                "upper_circuit_limit": self.price * 1.10,
+                "lower_circuit_limit": self.price * 0.90,
+            }
+        }
 
 
 def _use_kite(monkeypatch, fake):
