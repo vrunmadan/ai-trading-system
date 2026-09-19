@@ -85,6 +85,47 @@ def get_ltp(ticker: str, exchange: str = "NSE") -> float:
     return quote[key]["last_price"]
 
 
+def get_current_holding_quantity(ticker: str, exchange: str = "NSE") -> int | None:
+    """
+    Best-effort snapshot of how much of one ticker Kite currently shows,
+    merging positions()['net'] and holdings() the same way the reconciler
+    does. Used to capture a baseline at LIVE approval time, so a pre-existing
+    holding is never later mistaken for a new order's fill.
+
+    Returns None if this could not be determined (Kite unreachable, or both
+    calls failed) — the caller must treat that as "unknown", not "zero".
+    """
+    try:
+        kite = get_kite_client()
+    except Exception as e:
+        log.warning(f"Could not reach Kite for a holding-quantity snapshot: {e}")
+        return None
+
+    target = f"{(exchange or 'NSE').upper()}:{(ticker or '').upper()}"
+    found = False
+    qty = 0
+
+    try:
+        for h in (kite.holdings() or []):
+            key = f"{(h.get('exchange') or 'NSE').upper()}:{(h.get('tradingsymbol') or '').upper()}"
+            if key == target:
+                qty = max(qty, int(h.get("quantity") or 0))
+                found = True
+    except Exception as e:
+        log.warning(f"Could not fetch Kite holdings for baseline snapshot: {e}")
+
+    try:
+        for p in ((kite.positions() or {}).get("net", []) or []):
+            key = f"{(p.get('exchange') or 'NSE').upper()}:{(p.get('tradingsymbol') or '').upper()}"
+            if key == target:
+                qty = max(qty, int(p.get("quantity") or 0))
+                found = True
+    except Exception as e:
+        log.warning(f"Could not fetch Kite positions for baseline snapshot: {e}")
+
+    return qty if found else None
+
+
 def _get_instrument_token(kite, ticker: str, exchange: str = "NSE") -> int | None:
     """
     Returns the instrument token for a ticker on the given exchange, using a

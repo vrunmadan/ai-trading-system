@@ -425,13 +425,24 @@ def run_trade_reconciliation() -> None:
     Runs BEFORE the position monitor so stop-losses are evaluated against
     confirmed fills rather than assumed ones.
     """
-    from monitor.trade_reconciler import reconcile_pending_trades
+    from monitor.trade_reconciler import (
+        check_confirmed_live_positions_for_external_activity,
+        reconcile_pending_trades,
+    )
 
     log.info("Running trade reconciliation...")
     try:
         reconcile_pending_trades()
     except Exception as e:
         log.error(f"Trade reconciliation failed: {e}", exc_info=True)
+
+    # Separate from the PENDING-row reconciliation above: catches a LIVE
+    # position that was closed outside the system entirely (see
+    # monitor.trade_reconciler for why this can't just auto-close the row).
+    try:
+        check_confirmed_live_positions_for_external_activity()
+    except Exception as e:
+        log.error(f"External-activity check failed: {e}", exc_info=True)
 
 
 def run_eod_sweep() -> None:

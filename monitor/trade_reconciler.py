@@ -244,28 +244,43 @@ def reconcile_pending_trades() -> dict:
         ticker = trade["ticker"]
         exchange = trade.get("exchange") or "NSE"
         want_qty = int(trade["quantity"])
+        baseline = int(trade.get("baseline_quantity") or 0)
         key = _position_key(exchange, ticker)
         match = held.get(key)
+        # Only quantity ABOVE the approval-time baseline is genuinely new —
+        # below that, it's whatever was already sitting there (a personal
+        # holding, or a prior fill this system already recorded elsewhere).
+        # held[key] is shrunk as each row claims its share, so a second
+        # PENDING row against the same key later in this loop sees only
+        # what's left, not the same shares again (2026-09-19 review, item 3:
+        # multiple pending rows could otherwise double-claim one holding, and
+        # an old personal holding could be mistaken for a new fill).
+        claimable = max(0, match["quantity"] - baseline) if match else 0
 
-        if match:
-            # Claim only what we asked for. A larger holding means the user
-            # already owned some of this name, and that surplus is not ours.
-            fill_qty = min(want_qty, match["quantity"])
+        if match and claimable > 0:
+            fill_qty = min(want_qty, claimable)
             fill_price = match["average_price"] or float(trade["entry_price"] or 0.0)
             partial = fill_qty < want_qty
+            oversized = claimable > want_qty
             note = (
                 f"Confirmed from Kite {match['source']} at "
                 f"₹{fill_price:,.2f}"
                 + (f" (partial: {fill_qty}/{want_qty})" if partial else "")
+                + (f" — {claimable - want_qty} more new share(s) than requested "
+                   f"sit at this key; only {want_qty} recorded as this trade's "
+                   f"exposure" if oversized else "")
             )
             confirm_trade(trade_id, fill_price, quantity=fill_qty, note=note)
             _promote_signal(trade, mark_signal_executed)
             summary["confirmed"] += 1
             lines.append(
                 f"✅ CONFIRMED  {exchange}:{ticker}  {fill_qty} @ "
-                f"₹{fill_price:,.2f}" + ("  (PARTIAL FILL)" if partial else "")
+                f"₹{fill_price:,.2f}"
+                + ("  (PARTIAL FILL)" if partial else "")
+                + ("  (MORE THAN REQUESTED — see note)" if oversized else "")
             )
             log.info(f"Reconciler: trade {trade_id} {key} -> CONFIRMED. {note}")
+            held[key] = dict(match, quantity=match["quantity"] - fill_qty)
             continue
 
         if not snapshot_complete:
@@ -301,6 +316,9 @@ def reconcile_pending_trades() -> dict:
         reason = (
             f"Not found in Kite positions or holdings {age} day(s) after approval "
             f"— treating as never placed."
+            + (f" (Kite shows {match['quantity']} at this key, but all of it "
+               f"predates this order per its {baseline}-share baseline.)"
+               if match and baseline else "")
         )
         mark_trade_not_executed(trade_id, reason)
         _promote_signal(trade, mark_signal_not_executed)
@@ -325,6 +343,87 @@ def reconcile_pending_trades() -> dict:
         f"Reconciler done: {summary['confirmed']} confirmed, "
         f"{summary['not_executed']} not executed, {summary['deferred']} still pending."
     )
+    return summary
+
+
+def check_confirmed_live_positions_for_external_activity() -> dict:
+    """
+    reconcile_pending_trades() only ever looks at PENDING rows — once a LIVE
+    trade is CONFIRMED it is never checked again, so a position closed
+    outside this system (a manual sale in the Kite app, a corporate action,
+    anything not routed through the approve flow) leaves the ledger asserting
+    it is still open indefinitely, and every exposure/risk calculation keeps
+    counting a position that no longer exists (2026-09-19 review, item 3).
+
+    This does not attempt to reconstruct the real exit price or time — that
+    needs Kite's order/trade history, not just a holdings/positions snapshot,
+    and is future work (the review's "durable order/fill ledger with broker
+    IDs"). What it does today: notice when a still-open LIVE position has
+    completely disappeared from a COMPLETE Kite snapshot, and alert. The row
+    is left open — the system does not act on your behalf — but silence
+    becomes a heads-up instead.
+
+    Returns {"checked": n, "flagged": n, "skipped": bool}. Never raises.
+    """
+    from ledger.db import get_open_positions
+
+    summary = {"checked": 0, "flagged": 0, "skipped": False}
+    try:
+        open_live = get_open_positions(mode="LIVE")
+    except Exception as e:
+        log.error(f"Could not load open LIVE positions to check for external "
+                  f"activity: {e}", exc_info=True)
+        summary["skipped"] = True
+        return summary
+
+    summary["checked"] = len(open_live)
+    if not open_live:
+        return summary
+
+    try:
+        from trader.kite_client import get_kite_client
+        kite = get_kite_client()
+    except Exception as e:
+        log.warning(f"Could not check confirmed LIVE positions for external "
+                    f"activity — Kite unreachable: {e}")
+        summary["skipped"] = True
+        return summary
+
+    held, holdings_ok, positions_ok = _build_holdings_map(kite)
+    if not (holdings_ok and positions_ok):
+        log.warning("Could not check confirmed LIVE positions for external "
+                    "activity — Kite snapshot was incomplete this run.")
+        summary["skipped"] = True
+        return summary
+
+    flagged_lines: list[str] = []
+    for pos in open_live:
+        key = _position_key(pos.get("exchange") or "NSE", pos["ticker"])
+        match = held.get(key)
+        if not match or int(match.get("quantity") or 0) <= 0:
+            summary["flagged"] += 1
+            flagged_lines.append(
+                f"⚠️ {pos.get('exchange') or 'NSE'}:{pos['ticker']}  "
+                f"trade #{pos['id']}  {pos['quantity']} share(s) — the ledger "
+                f"shows this open, but Kite shows none. It may have been sold "
+                f"outside the system."
+            )
+            log.warning(
+                f"Trade {pos['id']} ({key}) is open in the ledger but absent "
+                f"from a complete Kite snapshot — possible external exit."
+            )
+
+    if flagged_lines:
+        _alert(
+            f"{summary['flagged']} LIVE position(s) may have moved outside the system",
+            "The ledger still shows these open, but a complete Kite snapshot "
+            "no longer does:\n"
+            + "─" * 40 + "\n" + "\n".join(flagged_lines)
+            + "\n\nNothing was changed automatically — the system does not "
+              "act on your behalf. If you sold these directly in Kite, close "
+              "them manually in the ledger so exposure and P&L stay accurate."
+        )
+
     return summary
 
 

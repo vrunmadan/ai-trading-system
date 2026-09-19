@@ -80,6 +80,7 @@ def init_db():
             "ALTER TABLE trades ADD COLUMN fill_status TEXT NOT NULL DEFAULT 'CONFIRMED'",
             "ALTER TABLE trades ADD COLUMN fill_note TEXT",
             "ALTER TABLE signals ADD COLUMN price_at_signal REAL",
+            "ALTER TABLE trades ADD COLUMN baseline_quantity INTEGER NOT NULL DEFAULT 0",
         ]:
             try:
                 conn.execute(migration)
@@ -307,13 +308,16 @@ def count_signals_today(ticker: str, status: str) -> int:
 def log_trade(signal_id: int, ticker: str, direction: str,
               quantity: int, entry_price: float, mode: str = "PAPER",
               exchange: str = "NSE", fill_status: str = "CONFIRMED",
-              fill_note: str | None = None) -> int:
+              fill_note: str | None = None, baseline_quantity: int = 0) -> int:
     """
     Insert a trade row.
 
     fill_status defaults to CONFIRMED because the only historical caller
     (trader.kite_client.execute_trade) places the order itself and therefore
     knows the fill happened. The approve path uses log_pending_trade instead.
+
+    baseline_quantity: for a LIVE approval, how much of this ticker Kite
+    already showed BEFORE this order — see log_pending_trade.
     """
     with get_db() as conn:
         entry_time = now_ist()
@@ -321,11 +325,11 @@ def log_trade(signal_id: int, ticker: str, direction: str,
             """
             INSERT INTO trades (signal_id, ticker, direction, quantity,
                                 entry_price, entry_time, mode, exchange,
-                                fill_status, fill_note)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
+                                fill_status, fill_note, baseline_quantity)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
             """,
             (signal_id, ticker, direction, quantity, entry_price, entry_time,
-             mode, exchange, fill_status, fill_note),
+             mode, exchange, fill_status, fill_note, baseline_quantity),
         )
         trade_id = cur.lastrowid
 
@@ -350,7 +354,7 @@ def log_trade(signal_id: int, ticker: str, direction: str,
 
 def log_pending_trade(signal_id: int, ticker: str, exchange: str, direction: str,
                       quantity: int, expected_price: float,
-                      mode: str = "PAPER") -> int:
+                      mode: str = "PAPER", baseline_quantity: int = 0) -> int:
     """
     Record the user's approved intent, before any fill is known.
 
@@ -359,12 +363,18 @@ def log_pending_trade(signal_id: int, ticker: str, exchange: str, direction: str
     confirms the fill. Writing this row at approve time is what makes same-day
     exposure visible to the portfolio gate and the Risk Sizer — without it,
     several signals approved in one batch cannot see each other.
+
+    baseline_quantity: best-effort Kite snapshot of this ticker taken right
+    before the order goes out (LIVE only). The reconciler only claims
+    quantity above it, so an old personal holding of the same stock can never
+    be confirmed as this order's fill (2026-09-19 review, item 3).
     """
     return log_trade(
         signal_id=signal_id, ticker=ticker, direction=direction,
         quantity=quantity, entry_price=expected_price, mode=mode,
         exchange=exchange, fill_status="PENDING",
         fill_note="Awaiting EOD reconciliation against Kite.",
+        baseline_quantity=baseline_quantity,
     )
 
 

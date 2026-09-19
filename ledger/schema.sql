@@ -47,7 +47,13 @@ CREATE TABLE IF NOT EXISTS trades (
     --   CONFIRMED     found in kite.positions()/holdings(); entry_price is the real average
     --   NOT_EXECUTED  not found at reconciliation; stops counting toward exposure
     fill_status TEXT NOT NULL DEFAULT 'CONFIRMED',
-    fill_note TEXT
+    fill_note TEXT,
+    -- Best-effort snapshot of how much of this ticker Kite already showed at
+    -- approval time (LIVE only; 0 for PAPER and for any LIVE row where the
+    -- snapshot couldn't be taken). Reconciliation only claims quantity ABOVE
+    -- this baseline, so a pre-existing personal holding of the same stock is
+    -- never mistaken for this order's fill (2026-09-19 review, item 3).
+    baseline_quantity INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS position_checks (

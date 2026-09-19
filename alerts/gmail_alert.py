@@ -477,6 +477,28 @@ def handle_email_action(action: str, signal_id: int):
         # with no matching position. entry_price is the expected price; the EOD
         # reconciler replaces it with the real average from Kite.
         expected_price = float(row["capital_to_deploy"] or 0.0) / quantity
+
+        # Best-effort baseline: how much of this ticker does Kite show RIGHT
+        # NOW, before this order even exists? Reconciliation later only
+        # claims quantity above this, so a pre-existing holding of the same
+        # stock (yours from before the bot, or a stale row from something
+        # else) can never be mistaken for this order's fill (2026-09-19
+        # review, item 3). PAPER never touches Kite, so it stays 0; a failed
+        # LIVE snapshot also falls back to 0 rather than blocking approval —
+        # that's the same exposure as before this fix, never worse.
+        baseline_quantity = 0
+        approval_mode = _current_mode()
+        if approval_mode == "LIVE":
+            try:
+                from trader.kite_client import get_current_holding_quantity
+                snapshot = get_current_holding_quantity(ticker, exchange)
+                baseline_quantity = snapshot if snapshot is not None else 0
+            except Exception as e:
+                log.warning(
+                    f"Could not snapshot a baseline for signal {signal_id} "
+                    f"({exchange}:{ticker}): {e}"
+                )
+
         try:
             trade_id = log_pending_trade(
                 signal_id=signal_id,
@@ -485,7 +507,8 @@ def handle_email_action(action: str, signal_id: int):
                 direction=direction,
                 quantity=quantity,
                 expected_price=expected_price,
-                mode=_current_mode(),
+                mode=approval_mode,
+                baseline_quantity=baseline_quantity,
             )
         except Exception as e:
             log.error(
@@ -503,7 +526,7 @@ def handle_email_action(action: str, signal_id: int):
         # Intent is recorded; now mark the signal.
         update_signal_response(signal_id, "APPROVED")
 
-        mode = _current_mode()
+        mode = approval_mode  # same read used for the baseline snapshot above
 
         if mode == "PAPER":
             # No real order screen, ever, for a paper approval. This is the

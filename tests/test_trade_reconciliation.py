@@ -642,3 +642,222 @@ def test_live_position_is_never_auto_closed(ledger, monkeypatch):
     row = db.get_trade_for_signal(trade["signal_id"])
     assert row["exit_price"] is None
     assert len(db.get_open_positions()) == 1
+
+
+# ---------------------------------------------------------------------------
+# Baseline-aware fill matching (2026-09-19 review, item 3)
+# ---------------------------------------------------------------------------
+
+def _pending_live_trade(db, ticker="ACME", exchange="NSE", quantity=400,
+                        capital=180_000.0, baseline_quantity=0):
+    """
+    A LIVE PENDING row with an explicit baseline_quantity, written directly
+    rather than through the approve flow — the approve flow's baseline
+    capture calls the real Kite client, which isn't mocked at approval time
+    in these tests and always falls back to 0.
+    """
+    sid = _insert_signal(db, ticker=ticker, exchange=exchange, quantity=quantity,
+                         capital=capital)
+    db.log_pending_trade(
+        signal_id=sid, ticker=ticker, exchange=exchange, direction="BUY",
+        quantity=quantity, expected_price=capital / quantity, mode="LIVE",
+        baseline_quantity=baseline_quantity,
+    )
+    return db.get_trade_for_signal(sid)
+
+
+def test_two_pending_rows_cannot_double_claim_one_holding(ledger, monkeypatch):
+    """
+    Two LIVE PENDING rows for the same key, but Kite only shows enough new
+    shares for one of them. Before the in-run reservation fix, both rows
+    would independently match the same Kite quantity and both get marked
+    CONFIRMED — inflating recorded exposure beyond what was actually bought.
+    """
+    db = ledger
+    monkeypatch.setenv("KITE_API_KEY", "k")
+    _silence_email(monkeypatch)
+
+    t1 = _pending_live_trade(db, quantity=400)
+    t2 = _pending_live_trade(db, quantity=400)
+
+    _use_kite(monkeypatch, FakeKite(positions=[
+        {"tradingsymbol": "ACME", "exchange": "NSE",
+         "quantity": 400, "average_price": 452.0},
+    ]))
+
+    from monitor.trade_reconciler import reconcile_pending_trades
+    summary = reconcile_pending_trades()
+
+    assert summary["confirmed"] == 1
+    assert summary["deferred"] == 1
+
+    row1 = db.get_trade_for_signal(t1["signal_id"])
+    row2 = db.get_trade_for_signal(t2["signal_id"])
+    statuses = sorted([row1["fill_status"], row2["fill_status"]])
+    assert statuses == ["CONFIRMED", "PENDING"]
+
+    confirmed = row1 if row1["fill_status"] == "CONFIRMED" else row2
+    assert confirmed["quantity"] == 400  # only the real 400 shares, not 800
+
+
+def test_baseline_blocks_a_preexisting_holding_from_being_confirmed(ledger, monkeypatch):
+    """
+    Kite shows exactly the baseline quantity — i.e. nothing new was bought.
+    Without subtracting the baseline, this looks identical to a genuine
+    fill and gets wrongly confirmed against a holding that predates the order.
+    """
+    db = ledger
+    monkeypatch.setenv("KITE_API_KEY", "k")
+    _silence_email(monkeypatch)
+
+    trade = _pending_live_trade(db, quantity=100, baseline_quantity=400)
+
+    _use_kite(monkeypatch, FakeKite(positions=[
+        {"tradingsymbol": "ACME", "exchange": "NSE",
+         "quantity": 400, "average_price": 452.0},
+    ]))
+
+    from monitor.trade_reconciler import reconcile_pending_trades
+    summary = reconcile_pending_trades()
+
+    assert summary["confirmed"] == 0
+    row = db.get_trade_for_signal(trade["signal_id"])
+    assert row["fill_status"] == "PENDING"     # not falsely confirmed from the pre-existing holding
+
+
+def test_baseline_lets_only_the_incremental_quantity_be_confirmed(ledger, monkeypatch):
+    """
+    A 400-share pre-existing holding, plus this order's real 50-share fill:
+    Kite shows 450 total. Only the 50 above baseline may be claimed.
+    """
+    db = ledger
+    monkeypatch.setenv("KITE_API_KEY", "k")
+    _silence_email(monkeypatch)
+
+    trade = _pending_live_trade(db, quantity=50, capital=22_500.0, baseline_quantity=400)
+
+    _use_kite(monkeypatch, FakeKite(positions=[
+        {"tradingsymbol": "ACME", "exchange": "NSE",
+         "quantity": 450, "average_price": 452.0},
+    ]))
+
+    from monitor.trade_reconciler import reconcile_pending_trades
+    summary = reconcile_pending_trades()
+
+    assert summary["confirmed"] == 1
+    row = db.get_trade_for_signal(trade["signal_id"])
+    assert row["fill_status"] == "CONFIRMED"
+    assert row["quantity"] == 50               # the increment, not the full 450
+
+
+def test_oversized_kite_match_is_noted_but_not_all_recorded_as_exposure(ledger, monkeypatch):
+    """
+    Kite shows far more new quantity than this order requested (e.g. a
+    manual top-up placed alongside the approved order). The trade is still
+    confirmed for what was asked, with a visible note about the surplus —
+    the surplus itself is never silently adopted as this trade's exposure.
+    """
+    db = ledger
+    monkeypatch.setenv("KITE_API_KEY", "k")
+    _silence_email(monkeypatch)
+
+    trade = _pending_live_trade(db, quantity=100, capital=45_000.0)
+
+    _use_kite(monkeypatch, FakeKite(positions=[
+        {"tradingsymbol": "ACME", "exchange": "NSE",
+         "quantity": 500, "average_price": 452.0},
+    ]))
+
+    from monitor.trade_reconciler import reconcile_pending_trades
+    reconcile_pending_trades()
+
+    row = db.get_trade_for_signal(trade["signal_id"])
+    assert row["fill_status"] == "CONFIRMED"
+    assert row["quantity"] == 100                    # not 500
+    assert "more new share" in row["fill_note"].lower()
+
+
+# ---------------------------------------------------------------------------
+# External-activity detection on already-CONFIRMED LIVE positions
+# ---------------------------------------------------------------------------
+
+def _confirmed_live_trade(db, monkeypatch, ticker="ACME", exchange="NSE",
+                          quantity=400, fill_price=452.0):
+    trade = _pending_live_trade(db, ticker=ticker, exchange=exchange, quantity=quantity)
+    _use_kite(monkeypatch, FakeKite(positions=[
+        {"tradingsymbol": ticker, "exchange": exchange,
+         "quantity": quantity, "average_price": fill_price},
+    ]))
+    from monitor.trade_reconciler import reconcile_pending_trades
+    reconcile_pending_trades()
+    return db.get_trade_for_signal(trade["signal_id"])
+
+
+def test_external_closure_is_flagged_when_kite_no_longer_shows_the_position(ledger, monkeypatch):
+    db = ledger
+    monkeypatch.setenv("KITE_API_KEY", "k")
+    _silence_email(monkeypatch)
+
+    row = _confirmed_live_trade(db, monkeypatch)
+    assert row["fill_status"] == "CONFIRMED"
+
+    # Now Kite shows nothing at all for this key — sold outside the system.
+    _use_kite(monkeypatch, FakeKite(positions=[], holdings=[]))
+
+    from monitor.trade_reconciler import check_confirmed_live_positions_for_external_activity
+    summary = check_confirmed_live_positions_for_external_activity()
+
+    assert summary == {"checked": 1, "flagged": 1, "skipped": False}
+    # The ledger row is left untouched — the system never acts on your behalf.
+    still_open = db.get_trade_for_signal(row["signal_id"])
+    assert still_open["exit_price"] is None
+    assert still_open["fill_status"] == "CONFIRMED"
+
+
+def test_external_closure_is_not_flagged_while_kite_still_shows_the_position(ledger, monkeypatch):
+    db = ledger
+    monkeypatch.setenv("KITE_API_KEY", "k")
+    _silence_email(monkeypatch)
+
+    _confirmed_live_trade(db, monkeypatch)
+
+    # Same FakeKite still in place from the confirming reconcile — still held.
+    from monitor.trade_reconciler import check_confirmed_live_positions_for_external_activity
+    summary = check_confirmed_live_positions_for_external_activity()
+
+    assert summary == {"checked": 1, "flagged": 0, "skipped": False}
+
+
+def test_external_closure_check_skips_when_both_kite_reads_fail(ledger, monkeypatch):
+    db = ledger
+    monkeypatch.setenv("KITE_API_KEY", "k")
+    _silence_email(monkeypatch)
+
+    _confirmed_live_trade(db, monkeypatch)
+
+    _use_kite(monkeypatch, FakeKite(fail=True))
+
+    from monitor.trade_reconciler import check_confirmed_live_positions_for_external_activity
+    summary = check_confirmed_live_positions_for_external_activity()
+
+    assert summary["skipped"] is True
+    assert summary["flagged"] == 0   # never guesses when it can't see the account
+
+
+def test_external_closure_check_skips_on_an_incomplete_snapshot(ledger, monkeypatch):
+    db = ledger
+    monkeypatch.setenv("KITE_API_KEY", "k")
+    _silence_email(monkeypatch)
+
+    _confirmed_live_trade(db, monkeypatch)
+
+    # holdings() fails, positions() succeeds but (correctly, since this trade
+    # is CNC and same-day) no longer includes this position — an incomplete
+    # snapshot, not a confirmed absence.
+    _use_kite(monkeypatch, FakeKite(positions=[], fail_holdings=True, fail_positions=False))
+
+    from monitor.trade_reconciler import check_confirmed_live_positions_for_external_activity
+    summary = check_confirmed_live_positions_for_external_activity()
+
+    assert summary["skipped"] is True
+    assert summary["flagged"] == 0
