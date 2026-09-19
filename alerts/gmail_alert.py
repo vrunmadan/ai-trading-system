@@ -379,9 +379,11 @@ def handle_email_action(action: str, signal_id: int):
     from ledger.db import (
         get_db,
         get_live_trade_for_signal,
+        get_open_positions,
         log_pending_trade,
         update_signal_response,
     )
+    from risk_sizer.sizer import MIN_POSITION_INR, TOTAL_CAPITAL
 
     if action == "approve":
         with get_db() as conn:
@@ -476,7 +478,118 @@ def handle_email_action(action: str, signal_id: int):
         # failure leaves both untouched rather than marking a signal APPROVED
         # with no matching position. entry_price is the expected price; the EOD
         # reconciler replaces it with the real average from Kite.
-        expected_price = float(row["capital_to_deploy"] or 0.0) / quantity
+        approval_mode = _current_mode()
+        capital_to_deploy = float(row["capital_to_deploy"] or 0.0)
+        # Always available, needs no Kite call: the price the sizer implied
+        # when this signal was generated. Used as PAPER's price outright, and
+        # as LIVE's fallback when a fresh quote can't be fetched.
+        generation_price = capital_to_deploy / quantity
+
+        # Executable-size revalidation, LIVE only (2026-09-19 review, item 5).
+        # sized_quantity/capital_to_deploy were computed against the portfolio
+        # as it stood when the signal was GENERATED. Approval links do not
+        # expire (item 8), so by the time this fires, other signals may have
+        # been approved, deploying capital this one was never checked
+        # against, or the same ticker may already be held. A PAPER approval
+        # risks nothing real and keeps the generation-time number; a LIVE
+        # handoff is revalidated against the book and the price as they are
+        # RIGHT NOW.
+        if approval_mode == "LIVE":
+            live_open = get_open_positions(mode="LIVE")
+
+            # No pyramiding — against the CURRENT book, not the snapshot this
+            # signal was scored against.
+            if any(p.get("ticker") == ticker for p in live_open):
+                log.warning(
+                    f"Refusing to approve signal {signal_id}: {ticker} is "
+                    f"already an open LIVE position. Portfolio state changed "
+                    f"since this alert was generated."
+                )
+                return (
+                    f"{ticker} is already an open LIVE position. This system "
+                    f"does not add to an existing position, so no Kite "
+                    f"basket was opened and the signal was left unchanged.",
+                    False,
+                    None,
+                )
+
+            # Free capital right now, not at generation time.
+            deployed_now = sum(
+                float(p["entry_price"] or 0.0) * int(p["quantity"])
+                for p in live_open
+            )
+            free_capital_now = TOTAL_CAPITAL - deployed_now
+            if free_capital_now < MIN_POSITION_INR:
+                log.warning(
+                    f"Refusing to approve signal {signal_id}: only "
+                    f"₹{free_capital_now:,.0f} free capital right now "
+                    f"(₹{deployed_now:,.0f} already deployed across "
+                    f"{len(live_open)} LIVE position(s))."
+                )
+                return (
+                    f"Only ₹{free_capital_now:,.0f} free capital is "
+                    f"available right now — below the "
+                    f"₹{MIN_POSITION_INR:,.0f} minimum. Portfolio state "
+                    f"changed since this alert was generated. No Kite "
+                    f"basket was opened; the signal was left unchanged.",
+                    False,
+                    None,
+                )
+
+            # Never deploy more than is actually free right now, even if
+            # this signal was sized against a roomier book at generation.
+            capital_to_deploy = min(capital_to_deploy, free_capital_now * 0.95)
+
+            # Refresh the price. Best-effort: a live price that can't be
+            # fetched falls back to the generation-time price rather than
+            # blocking approval outright — the same fail-open philosophy
+            # used for baseline capture below and for the mark-to-market and
+            # broker-read-failure fixes elsewhere in this review (no worse
+            # than before this fix).
+            try:
+                from trader.kite_client import get_ltp
+                current_price = get_ltp(ticker, exchange)
+            except Exception as e:
+                log.warning(
+                    f"Could not refresh a live price for {exchange}:{ticker} "
+                    f"at approval time for signal {signal_id} — using the "
+                    f"generation-time price instead: {e}"
+                )
+                current_price = generation_price
+
+            # Shrink (never grow) quantity to what the — possibly reduced —
+            # capital actually buys at the — possibly refreshed — price.
+            # This must run whether or not the price refresh succeeded: a
+            # capital cut with quantity left untouched would still send the
+            # ORIGINAL, larger quantity to the broker, silently defeating the
+            # free-capital check above.
+            feasible_quantity = (
+                int(capital_to_deploy // current_price) if current_price > 0 else 0
+            )
+            if feasible_quantity < quantity:
+                log.info(
+                    f"Signal {signal_id}: shrinking quantity {quantity} -> "
+                    f"{feasible_quantity} at approval time (free capital "
+                    f"₹{free_capital_now:,.0f}, price ₹{current_price:,.2f})."
+                )
+            quantity = max(0, min(quantity, feasible_quantity))
+            expected_price = current_price
+
+            if quantity < 1:
+                log.warning(
+                    f"Refusing to approve signal {signal_id}: at the "
+                    f"current price, the available capital buys 0 shares "
+                    f"of {ticker}."
+                )
+                return (
+                    f"At the current price, the available capital does not "
+                    f"buy even 1 share of {ticker}. No Kite basket was "
+                    f"opened; the signal was left unchanged.",
+                    False,
+                    None,
+                )
+        else:
+            expected_price = generation_price
 
         # Best-effort baseline: how much of this ticker does Kite show RIGHT
         # NOW, before this order even exists? Reconciliation later only
@@ -487,7 +600,6 @@ def handle_email_action(action: str, signal_id: int):
         # LIVE snapshot also falls back to 0 rather than blocking approval —
         # that's the same exposure as before this fix, never worse.
         baseline_quantity = 0
-        approval_mode = _current_mode()
         if approval_mode == "LIVE":
             try:
                 from trader.kite_client import get_current_holding_quantity
