@@ -44,8 +44,11 @@ def ledger(monkeypatch):
 def _reset_instrument_cache():
     """microstructure_checks()'s liquidity lookup uses a module-level
     instrument-token cache shared across the whole test session — reset it
-    so a real fetch is attempted (and gracefully degrades to 0.0 turnover
-    when it can't be found) rather than reusing another test file's cache."""
+    so a real fetch is attempted against each test's fake Kite client rather
+    than reusing another test file's cache. A fake that cannot resolve an
+    instrument token or historical data now fails microstructure_checks
+    closed (2026-09-22), not open, so any fake meant to reach the approval
+    path needs real instruments()/historical_data() — see HealthyKite."""
     import trader.kite_client as kc
 
     kc._instrument_token_cache = {}
@@ -105,8 +108,12 @@ class NearCircuitKite:
 
 
 class HealthyKite:
-    def __init__(self, price=450.0):
+    """Healthy on every microstructure_checks() axis: circuit buffer,
+    liquidity and ADV — a genuinely tradeable stock, not just a price feed."""
+
+    def __init__(self, price=450.0, turnover_per_day=10_00_00_000):
         self.price = price
+        self.turnover_per_day = turnover_per_day
 
     def ltp(self, key):
         return {key: {"last_price": self.price}}
@@ -119,6 +126,13 @@ class HealthyKite:
                 "lower_circuit_limit": self.price * 0.90,
             }
         }
+
+    def instruments(self, exchange):
+        return [{"tradingsymbol": "ACME", "instrument_token": 1}]
+
+    def historical_data(self, token, from_date, to_date, interval, **kwargs):
+        volume = int(self.turnover_per_day / self.price)
+        return [{"volume": volume, "close": self.price}] * 20
 
 
 def _use_kite(monkeypatch, fake):

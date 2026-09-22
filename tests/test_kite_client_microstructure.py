@@ -124,3 +124,40 @@ class TestAllChecksPass:
         ok, reason = microstructure_checks("DUMMY", capital_to_deploy=10_000)
         assert ok is False
         assert "could not fetch quote" in reason.lower()
+
+    def test_turnover_fetch_failure_rejects_safely(self, monkeypatch):
+        """
+        2026-09-22 fix: a turnover fetch failure used to be indistinguishable
+        from a genuine 0.0 reading, which disabled BOTH the liquidity floor
+        and the ADV cap and still returned ok=True. It must now fail closed,
+        like the quote-fetch failure above.
+        """
+        class _QuoteOkTurnoverBroken:
+            def quote(self, key):
+                return {key: {"last_price": 100.0, "upper_circuit_limit": 120.0,
+                               "lower_circuit_limit": 80.0}}
+
+            def instruments(self, exchange):
+                return [{"tradingsymbol": "DUMMY", "instrument_token": 1}]
+
+            def historical_data(self, token, from_date, to_date, interval, **kwargs):
+                raise ConnectionError("simulated historical-data failure")
+
+        mock_kite(monkeypatch, _QuoteOkTurnoverBroken())
+        ok, reason = microstructure_checks("DUMMY", capital_to_deploy=10_000)
+        assert ok is False
+        assert "liquidity" in reason.lower() and "unavailable" in reason.lower()
+
+    def test_missing_instrument_token_rejects_safely(self, monkeypatch):
+        class _NoInstrumentKite:
+            def quote(self, key):
+                return {key: {"last_price": 100.0, "upper_circuit_limit": 120.0,
+                               "lower_circuit_limit": 80.0}}
+
+            def instruments(self, exchange):
+                return []  # DUMMY not found
+
+        mock_kite(monkeypatch, _NoInstrumentKite())
+        ok, reason = microstructure_checks("DUMMY", capital_to_deploy=10_000)
+        assert ok is False
+        assert "liquidity" in reason.lower() and "unavailable" in reason.lower()

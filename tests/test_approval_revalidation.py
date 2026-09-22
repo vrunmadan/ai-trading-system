@@ -86,14 +86,19 @@ def _live(monkeypatch):
 class FakeKite:
     """
     What get_ltp() calls (.ltp), plus what the item-7 microstructure
-    preflight calls (.quote) whenever the price refresh succeeds — healthy
-    enough (a wide circuit buffer) to never trip that check on its own, so
-    these fakes model "Kite reachable, price fetched" without also having to
-    model liquidity data for every test.
+    preflight calls (.quote, .instruments, .historical_data) whenever the
+    price refresh succeeds — healthy enough (wide circuit buffer, ample
+    liquidity) to never trip that check on its own, so these fakes model
+    "Kite reachable, price fetched, genuinely tradeable stock" without every
+    test needing to reason about microstructure. A fake missing
+    instruments()/historical_data() now fails the liquidity check CLOSED
+    (2026-09-22 — see trader/kite_client.py), not open, so this must model
+    real turnover, not just the quote.
     """
 
-    def __init__(self, price):
+    def __init__(self, price, turnover_per_day=10_00_00_000):
         self.price = price
+        self.turnover_per_day = turnover_per_day
 
     def ltp(self, key):
         return {key: {"last_price": self.price}}
@@ -106,6 +111,13 @@ class FakeKite:
                 "lower_circuit_limit": self.price * 0.90,
             }
         }
+
+    def instruments(self, exchange):
+        return [{"tradingsymbol": "ACME", "instrument_token": 1}]
+
+    def historical_data(self, token, from_date, to_date, interval, **kwargs):
+        volume = int(self.turnover_per_day / self.price)
+        return [{"volume": volume, "close": self.price}] * 20
 
 
 def _use_kite(monkeypatch, fake):

@@ -147,18 +147,24 @@ def _get_instrument_token(kite, ticker: str, exchange: str = "NSE") -> int | Non
     return _instrument_token_cache.get(cache_key)
 
 
-def get_20d_avg_turnover(ticker: str, exchange: str = "NSE") -> float:
+def get_20d_avg_turnover(ticker: str, exchange: str = "NSE") -> float | None:
     """
     Returns the 20-trading-day average daily turnover in INR (volume × close).
     Fetches from Kite historical data API (requires ₹500/month plan).
-    Returns 0.0 on any error so callers can decide to skip or pass-through.
+
+    Returns None — never 0.0 — when the figure could not be determined (no
+    instrument token, no historical data, or any fetch/compute error), so a
+    data outage can never be mistaken for a real, zero-liquidity reading by
+    a caller (2026-09-22: microstructure_checks() used to treat both cases
+    identically, which disabled both the liquidity floor and the ADV cap on
+    a single Kite hiccup — see below).
     """
     try:
         kite = get_kite_client()
         token = _get_instrument_token(kite, ticker, exchange)
         if token is None:
             log.warning(f"No instrument token found for {exchange}:{ticker} — check symbol.")
-            return 0.0
+            return None
 
         to_date = datetime.now()
         from_date = to_date - timedelta(days=35)  # ~35 calendar days → ~20+ trading days
@@ -166,7 +172,7 @@ def get_20d_avg_turnover(ticker: str, exchange: str = "NSE") -> float:
 
         if not candles:
             log.warning(f"No historical data returned for {ticker}.")
-            return 0.0
+            return None
 
         recent = candles[-20:] if len(candles) >= 20 else candles
         avg_turnover = sum(c["volume"] * c["close"] for c in recent) / len(recent)
@@ -175,7 +181,7 @@ def get_20d_avg_turnover(ticker: str, exchange: str = "NSE") -> float:
 
     except Exception as e:
         log.warning(f"Could not compute avg turnover for {ticker}: {e}")
-        return 0.0
+        return None
 
 
 def get_quote_details(ticker: str, exchange: str = "NSE") -> dict:
@@ -210,28 +216,41 @@ def microstructure_checks(
         # Liquidity check: skip stocks whose 20-day avg daily turnover is below
         # MIN_DAILY_TURNOVER_INR (default ₹3 Cr). This catches micro-caps that
         # pass the fundamental screen but are too illiquid to trade without
-        # significant slippage. Fail-safe: if data is unavailable, log and continue.
+        # significant slippage.
+        #
+        # Fail CLOSED, not open, when the figure is unavailable: this used to
+        # log a warning and proceed, which — because get_20d_avg_turnover
+        # also returned 0.0 on a genuine fetch error, not just on real zero
+        # liquidity — silently disabled BOTH the liquidity floor below AND
+        # the ADV cap two blocks down on a single Kite hiccup, for a function
+        # that still returned "Microstructure checks passed." This function
+        # only runs on the real approval handoff (alerts/gmail_alert.py,
+        # since the 2026-09-19 review's item 7 fix), so a disabled circuit
+        # breaker here is not latent — it is live on real orders.
         avg_turnover = get_20d_avg_turnover(ticker, exchange)
-        if avg_turnover == 0.0:
-            log.warning(
-                f"{exchange}:{ticker}: could not verify liquidity — proceeding with caution."
+        if avg_turnover is None:
+            return False, (
+                f"{exchange}:{ticker}: could not verify liquidity (turnover data "
+                f"unavailable) — refusing to trade until data is available, rather "
+                f"than skipping the liquidity/ADV checks."
             )
-        elif avg_turnover < MIN_DAILY_TURNOVER_INR:
+        if avg_turnover < MIN_DAILY_TURNOVER_INR:
             return False, (
                 f"{exchange}:{ticker} avg daily turnover ₹{avg_turnover/1e7:.1f}Cr < "
                 f"minimum ₹{MIN_DAILY_TURNOVER_INR/1e7:.0f}Cr — too illiquid to trade."
             )
 
         # ADV check: order size must not exceed MAX_ADV_PCT of 20-day average daily volume.
-        # Prevents your own order from moving the price against you.
-        if avg_turnover > 0:
-            approx_shares = capital_to_deploy / ltp
-            avg_daily_volume = avg_turnover / ltp  # rough estimate from turnover
-            if approx_shares > avg_daily_volume * (MAX_ADV_PCT / 100):
-                return False, (
-                    f"Order size ({approx_shares:.0f} shares) > {MAX_ADV_PCT}% of "
-                    f"20d avg volume ({avg_daily_volume:.0f}) — would move the market."
-                )
+        # Prevents your own order from moving the price against you. avg_turnover is
+        # guaranteed a real, non-None figure here — the None case returned above,
+        # and a genuine 0.0 would already have failed the liquidity check.
+        approx_shares = capital_to_deploy / ltp
+        avg_daily_volume = avg_turnover / ltp  # rough estimate from turnover
+        if approx_shares > avg_daily_volume * (MAX_ADV_PCT / 100):
+            return False, (
+                f"Order size ({approx_shares:.0f} shares) > {MAX_ADV_PCT}% of "
+                f"20d avg volume ({avg_daily_volume:.0f}) — would move the market."
+            )
 
         # TODO: Corporate action blackout
         # if days_to_next_corporate_action(ticker) <= CORP_ACTION_BLACKOUT_DAYS:
