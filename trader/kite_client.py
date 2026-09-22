@@ -24,9 +24,14 @@ BEFORE any order is placed, paper or live):
 import os
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
+from typing import Optional
+
+import pytz
 
 log = logging.getLogger(__name__)
+
+IST = pytz.timezone("Asia/Kolkata")
 
 PAPER_MODE = os.getenv("PAPER_MODE", "true").lower() == "true"
 MAX_ADV_PCT = float(os.getenv("MAX_ADV_PCT", 2.0))       # max 2% of avg daily volume
@@ -37,6 +42,72 @@ MIN_DAILY_TURNOVER_INR = float(os.getenv("MIN_DAILY_TURNOVER_INR", 3_00_00_000))
 # Module-level instrument token cache — populated once per session on first use.
 # Avoids fetching all ~1800 NSE instruments on every pre-trade check.
 _instrument_token_cache: dict[str, int] = {}
+
+# NSE cash-equity market close. A "day" interval Kite candle for the current
+# session updates continuously (volume growing, high/low widening) until
+# this point — before it, the bar in that position is not a settled close.
+MARKET_CLOSE_HOUR = 15
+MARKET_CLOSE_MINUTE = 30
+
+
+def _bar_date(bar: dict) -> Optional[date]:
+    """
+    Extracts a plain date from a Kite historical_data() bar's 'date' field
+    (a tz-aware datetime for daily candles, per the kiteconnect SDK).
+    Returns None — never raises — for any unexpected shape, so callers can
+    fail safe (skip the trim) rather than guess or crash on a schema change.
+    """
+    raw = bar.get("date")
+    if raw is None:
+        return None
+    if isinstance(raw, datetime):
+        return raw.date()
+    if isinstance(raw, date):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return datetime.fromisoformat(raw[:10]).date()
+        except ValueError:
+            return None
+    return None
+
+
+def drop_incomplete_today_bar(hist: list[dict], now: Optional[datetime] = None) -> list[dict]:
+    """
+    Drops the last bar from a "day"-interval historical_data() response if
+    it's TODAY's bar and the market hasn't closed yet — Kite's daily candle
+    for the current session is a live, in-progress bar (volume and range
+    both still accumulating) until 15:30 IST, not a settled close.
+
+    Fixed 2026-09-22: every daily indicator across this system (RSI, ATR,
+    Supertrend, volume ratio, 52wk proximity, Bollinger, ADX, CCI, EMAs,
+    the Nifty/breadth regime inputs) used to be computed directly on
+    whatever Kite returned, including that live bar during market hours.
+    That created a mechanical time-of-day bias unrelated to the stock's
+    actual setup — e.g. a volume-ratio gate (today's volume vs. 20-day
+    average) is near-impossible to clear at the 09:15 cycle and gets
+    steadily easier purely as the day's volume accumulates toward 15:30.
+    streak_backtests/backtest.py, which is what "validated" this strategy,
+    only ever iterates fully-settled historical daily bars — it has no
+    concept of a partial day — so live evaluating on an in-progress bar
+    was scoring signals against a candle shape the backtest never saw.
+
+    Fails safe: if the last bar's date can't be determined (missing/
+    unexpected 'date' field), or it isn't today's bar, or the market has
+    already closed today, returns `hist` unchanged.
+    """
+    if not hist:
+        return hist
+    now = now or datetime.now(IST)
+    last_bar_date = _bar_date(hist[-1])
+    if last_bar_date is None or last_bar_date != now.date():
+        return hist  # last bar isn't today's — already settled
+    market_close = now.replace(
+        hour=MARKET_CLOSE_HOUR, minute=MARKET_CLOSE_MINUTE, second=0, microsecond=0
+    )
+    if now >= market_close:
+        return hist  # today's session is done — today's bar is settled too
+    return hist[:-1]
 
 
 @dataclass

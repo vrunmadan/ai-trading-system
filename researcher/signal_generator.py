@@ -194,6 +194,54 @@ def _rsi(closes: list[float], period: int = 14) -> float:
     return round(100 - 100 / (1 + rs), 1)
 
 
+def _atr_series(highs: list[float], lows: list[float], closes: list[float],
+                 period: int = 14) -> list[float]:
+    """
+    Wilder's-smoothed Average True Range, as a full series (one value per
+    bar from index `period` onward, aligned with closes[period:] — i.e.
+    atr_series[i] corresponds to closes[i + period]). True range for bar i
+    is max(high-low, |high - prev_close|, |low - prev_close|), which is
+    what "ATR" means everywhere in finance (gap days count).
+
+    Fixed 2026-09-22: this used to be duplicated inline inside _supertrend
+    only, while _compute_indicators()'s atr_pct used a DIFFERENT, wrong
+    formula ((14-day high - 14-day low) / 14) that reported ~0.2-0.3x the
+    real ATR while still being labelled "ATR(14)" in the prompt Claude
+    scores against. Factoring this out means _supertrend and atr_pct now
+    share one correct implementation instead of drifting.
+
+    Returns [] if there isn't enough history for even one TR value.
+    """
+    if len(closes) < period + 1:
+        return []
+    tr_list = []
+    for i in range(1, len(closes)):
+        tr = max(
+            highs[i] - lows[i],
+            abs(highs[i] - closes[i - 1]),
+            abs(lows[i] - closes[i - 1]),
+        )
+        tr_list.append(tr)
+    if len(tr_list) < period:
+        return []
+
+    atr_list = [sum(tr_list[:period]) / period]
+    for tr in tr_list[period:]:
+        atr_list.append((atr_list[-1] * (period - 1) + tr) / period)
+    return atr_list
+
+
+def _atr_pct(highs: list[float], lows: list[float], closes: list[float],
+             ltp: float, period: int = 14) -> float:
+    """Latest ATR(period) as a % of current price. 0.0 if there isn't
+    enough history to compute it (matches the old formula's degenerate
+    behaviour on thin history, so callers don't need a new None-check)."""
+    series = _atr_series(highs, lows, closes, period)
+    if not series or ltp <= 0:
+        return 0.0
+    return round(series[-1] / ltp * 100, 2)
+
+
 def _supertrend(highs: list[float], lows: list[float], closes: list[float],
                 period: int = 10, multiplier: float = 3.0) -> tuple[str, bool]:
     """
@@ -204,19 +252,9 @@ def _supertrend(highs: list[float], lows: list[float], closes: list[float],
     if len(closes) < period + 3:
         return "UNKNOWN", False
 
-    # Compute ATR using Wilder's smoothing
-    tr_list = []
-    for i in range(1, len(closes)):
-        tr = max(
-            highs[i] - lows[i],
-            abs(highs[i] - closes[i - 1]),
-            abs(lows[i] - closes[i - 1]),
-        )
-        tr_list.append(tr)
-
-    atr_list = [sum(tr_list[:period]) / period]
-    for tr in tr_list[period:]:
-        atr_list.append((atr_list[-1] * (period - 1) + tr) / period)
+    atr_list = _atr_series(highs, lows, closes, period)
+    if not atr_list:
+        return "UNKNOWN", False
 
     # Supertrend bands (indexed against closes[period:])
     n = len(atr_list)
@@ -404,7 +442,7 @@ def _compute_indicators(hist: list[dict], ticker: str) -> dict:
         "sma_200": round(sum(closes[-n200:]) / n200, 2),
         "above_sma50": ltp > sum(closes[-n50:]) / n50,
         "above_sma200": ltp > sum(closes[-n200:]) / n200,
-        "atr_pct": round((max(highs[-14:]) - min(lows[-14:])) / ltp / 14 * 100, 2),
+        "atr_pct": _atr_pct(highs, lows, closes, ltp),
         # --- indicators added for the evidence-based strategy baskets ---
         "adx_14": adx,
         "plus_di": plus_di,
@@ -833,7 +871,7 @@ def generate_signal(regime_reading: RegimeReading) -> Optional[TradeSignal]:
         log.info(f"No long strategies for {regime.value} — cycle skipped.")
         return None
 
-    from trader.kite_client import get_kite_client
+    from trader.kite_client import get_kite_client, drop_incomplete_today_bar
 
     kite = get_kite_client()
 
@@ -908,6 +946,7 @@ def generate_signal(regime_reading: RegimeReading) -> Optional[TradeSignal]:
         # Fetch OHLCV history
         try:
             hist = kite.historical_data(int(token), from_date, to_date, "day")
+            hist = drop_incomplete_today_bar(hist)  # see trader/kite_client.py
             if len(hist) < 30:
                 log.debug(f"{ticker}: insufficient history ({len(hist)} bars)")
                 for strategy in baskets:

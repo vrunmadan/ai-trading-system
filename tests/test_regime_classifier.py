@@ -151,3 +151,186 @@ class TestApplyInertiaWiring:
         # ...an out-of-band monitor/debug call must not add a third entry.
         classify_regime(apply_inertia=False)
         assert rc._regime_history == history_after_two_cycles
+
+
+# ---------------------------------------------------------------------------
+# Fixed 2026-09-22: _fetch_nifty_vs_200ema/_fetch_vix/_fetch_breadth used to
+# fall back to hardcoded "neutral" numbers (Nifty 22000.0, VIX 18.0, breadth
+# 50.0) when ALL real data sources failed -- indistinguishable from a real
+# reading, and able to combine into a confident (including BULL) regime
+# built entirely on invented data. They now return None on total failure,
+# and classify_regime() refuses to classify on that, returning a flagged,
+# zero-confidence SIDEWAYS read instead.
+# ---------------------------------------------------------------------------
+
+class _RaisingKite:
+    """Every call fails -- simulates a total data outage."""
+
+    def instruments(self, exchange):
+        return []
+
+    def historical_data(self, *a, **k):
+        raise ConnectionError("simulated outage")
+
+    def ltp(self, *a, **k):
+        raise ConnectionError("simulated outage")
+
+
+class TestFetchersReturnNoneOnTotalFailure:
+    def test_nifty_returns_none_when_history_and_ltp_both_fail(self):
+        assert rc._fetch_nifty_vs_200ema(_RaisingKite()) is None
+
+    def test_vix_returns_none_when_history_and_ltp_both_fail(self):
+        assert rc._fetch_vix(_RaisingKite()) is None
+
+    def test_breadth_returns_none_when_no_sampled_ticker_resolves(self):
+        instruments_map = {"DUMMY": 1}
+        assert rc._fetch_breadth(_RaisingKite(), ["DUMMY"], instruments_map) is None
+
+    def test_nifty_still_returns_real_ltp_when_only_history_fails(self):
+        # LTP-only is real data (just no 200-EMA trend) -- must NOT be
+        # treated the same as a total failure.
+        class _HistoryFailsLtpWorks:
+            def historical_data(self, *a, **k):
+                raise ConnectionError("simulated")
+
+            def ltp(self, keys):
+                return {"NSE:NIFTY 50": {"last_price": 25000.0}}
+
+        result = rc._fetch_nifty_vs_200ema(_HistoryFailsLtpWorks())
+        assert result == (25000.0, 0.0)
+
+    def test_vix_still_returns_real_ltp_when_only_history_fails(self):
+        class _HistoryFailsLtpWorks:
+            def historical_data(self, *a, **k):
+                raise ConnectionError("simulated")
+
+            def ltp(self, keys):
+                return {"NSE:INDIA VIX": {"last_price": 14.0}}
+
+        result = rc._fetch_vix(_HistoryFailsLtpWorks())
+        assert result == (14.0, 0.0)
+
+
+class TestClassifyRegimeDegradedRead:
+    def test_total_data_outage_returns_flagged_zero_confidence_sideways(self, monkeypatch):
+        monkeypatch.setattr("trader.kite_client.get_kite_client", lambda: _RaisingKite())
+        monkeypatch.setattr("universe.loader.get_tickers", lambda: ["DUMMY"])
+
+        reading = classify_regime()
+
+        assert reading.regime == Regime.SIDEWAYS
+        assert reading.confidence == 0.0
+        assert "DATA UNAVAILABLE" in reading.rationale
+        assert "Nifty 50" in reading.rationale
+        assert "India VIX" in reading.rationale
+        assert "market breadth" in reading.rationale
+
+    def test_degraded_read_does_not_fabricate_market_levels(self, monkeypatch):
+        monkeypatch.setattr("trader.kite_client.get_kite_client", lambda: _RaisingKite())
+        monkeypatch.setattr("universe.loader.get_tickers", lambda: ["DUMMY"])
+
+        reading = classify_regime()
+
+        # Explicitly NOT the old hardcoded 22000.0 / 18.0 fabricated levels.
+        assert reading.nifty_vs_ema_pct == 0.0
+        assert reading.vix == 0.0
+        assert reading.breadth_pct == 0.0
+
+    def test_degraded_read_does_not_pollute_inertia_history(self, monkeypatch):
+        monkeypatch.setattr("trader.kite_client.get_kite_client", lambda: _RaisingKite())
+        monkeypatch.setattr("universe.loader.get_tickers", lambda: ["DUMMY"])
+
+        assert rc._regime_history == []
+        classify_regime()
+        assert rc._regime_history == []  # never entered inertia smoothing
+
+    def test_partial_failure_is_not_treated_as_a_total_outage(self, monkeypatch):
+        """
+        Nifty/VIX history fail but their LTP fallbacks succeed, and breadth
+        resolves normally -- this is real (if thinner) data, not fabricated,
+        so classify_regime must NOT take the degraded path.
+        """
+
+        class _PartialFailKite:
+            def instruments(self, exchange):
+                return [{"tradingsymbol": "DUMMY", "instrument_token": 1, "instrument_type": "EQ"}]
+
+            def historical_data(self, token, from_date, to_date, interval, **kwargs):
+                if token in (rc.INDIA_VIX_TOKEN, rc.NIFTY50_TOKEN):
+                    raise ConnectionError("simulated index-history outage")
+                return [{"close": 100.0 + i} for i in range(60)]  # breadth ticker
+
+            def ltp(self, keys):
+                ks = [keys] if isinstance(keys, str) else keys
+                return {k: {"last_price": 14.0 if "VIX" in k else 25000.0} for k in ks}
+
+        monkeypatch.setattr("trader.kite_client.get_kite_client", lambda: _PartialFailKite())
+        monkeypatch.setattr("universe.loader.get_tickers", lambda: ["DUMMY"])
+
+        reading = classify_regime()
+
+        assert "DATA UNAVAILABLE" not in reading.rationale
+        assert reading.vix == 14.0
+        assert reading.nifty_vs_ema_pct == 0.0  # LTP-only fallback assumes neutral vs EMA
+
+
+class TestFetchersCallDropIncompleteTodayBar:
+    """
+    Wiring check: _fetch_nifty_vs_200ema/_fetch_vix/_fetch_breadth must each
+    call trader.kite_client.drop_incomplete_today_bar() on whatever Kite
+    returns, before computing anything from it. Spies on the (module-level)
+    function rather than faking wall-clock time, since
+    drop_incomplete_today_bar()'s own before/after-close behaviour is
+    already exhaustively covered in test_market_session.py -- this only
+    needs to prove each call site actually invokes it.
+    """
+
+    def _install_spy(self, monkeypatch):
+        calls = []
+
+        def _spy(hist, now=None):
+            calls.append(list(hist))
+            return hist[:-1] if hist else hist  # simulate "today's bar dropped"
+
+        monkeypatch.setattr("trader.kite_client.drop_incomplete_today_bar", _spy)
+        return calls
+
+    def test_nifty_fetch_calls_it_and_uses_the_trimmed_result(self, monkeypatch):
+        calls = self._install_spy(monkeypatch)
+
+        class _Kite:
+            def historical_data(self, token, from_date, to_date, interval, **kwargs):
+                return [{"close": 100.0}] * 60  # last one would be "today"
+
+        result = rc._fetch_nifty_vs_200ema(_Kite())
+
+        assert len(calls) == 1
+        assert len(calls[0]) == 60  # spy was handed the untrimmed 60 bars
+        assert result is not None  # fetcher still works off the trimmed 59
+
+    def test_vix_fetch_calls_it_and_uses_the_trimmed_result(self, monkeypatch):
+        calls = self._install_spy(monkeypatch)
+
+        class _Kite:
+            def historical_data(self, token, from_date, to_date, interval, **kwargs):
+                return [{"close": 15.0}] * 10
+
+        result = rc._fetch_vix(_Kite())
+
+        assert len(calls) == 1
+        assert len(calls[0]) == 10
+        assert result is not None
+
+    def test_breadth_fetch_calls_it_per_ticker(self, monkeypatch):
+        calls = self._install_spy(monkeypatch)
+
+        class _Kite:
+            def historical_data(self, token, from_date, to_date, interval, **kwargs):
+                return [{"close": 100.0 + i} for i in range(60)]
+
+        instruments_map = {"DUMMY": 1}
+        result = rc._fetch_breadth(_Kite(), ["DUMMY"], instruments_map)
+
+        assert len(calls) == 1  # one sampled ticker -> one historical_data call
+        assert result is not None

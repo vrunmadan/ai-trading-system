@@ -100,11 +100,21 @@ def _sma(prices: list[float], period: int) -> float:
 # Data fetchers (each returns a safe fallback on error)
 # ---------------------------------------------------------------------------
 
-def _fetch_nifty_vs_200ema(kite) -> tuple[float, float]:
+def _fetch_nifty_vs_200ema(kite) -> Optional[tuple[float, float]]:
     """
-    Returns (nifty_ltp, pct_vs_200ema).
-    Fetches ~14 months of daily history to compute the 200-day EMA cleanly.
+    Returns (nifty_ltp, pct_vs_200ema), or None if BOTH the history fetch
+    and the LTP fallback fail.
+
+    Fixed 2026-09-22: this used to fall back to a hardcoded 22000.0 (with
+    pct_vs_200ema=0.0, i.e. "assume neutral") when both real fetches
+    failed. That fabricated a plausible-looking Nifty level indistinguishable
+    from a real read, which could combine with a genuinely-fetched VIX/
+    breadth to produce a confident regime (including BULL) built on invented
+    data. Returning None instead lets classify_regime() refuse to fabricate
+    a market assessment when it has no real market data.
     """
+    from trader.kite_client import drop_incomplete_today_bar
+
     from_date = (date.today() - timedelta(days=420)).strftime("%Y-%m-%d")
     to_date = date.today().strftime("%Y-%m-%d")
 
@@ -113,6 +123,7 @@ def _fetch_nifty_vs_200ema(kite) -> tuple[float, float]:
             NIFTY50_TOKEN, from_date, to_date, "day",
             continuous=False, oi=False,
         )
+        hist = drop_incomplete_today_bar(hist)
         closes = [c["close"] for c in hist]
         if len(closes) < 50:
             raise ValueError(f"Too few Nifty history bars: {len(closes)}")
@@ -126,22 +137,31 @@ def _fetch_nifty_vs_200ema(kite) -> tuple[float, float]:
         try:
             q = kite.ltp(["NSE:NIFTY 50"])
             ltp = q["NSE:NIFTY 50"]["last_price"]
-            return ltp, 0.0   # assume neutral vs EMA
+            return ltp, 0.0   # assume neutral vs EMA — LTP is still real data
         except Exception as e2:
             log.error(f"Nifty 50 LTP fetch also failed: {e2}")
-            return 22000.0, 0.0   # hardcoded fallback — will produce SIDEWAYS
+            return None
 
 
-def _fetch_vix(kite) -> tuple[float, float]:
+def _fetch_vix(kite) -> Optional[tuple[float, float]]:
     """
-    Returns (vix_current, vix_5d_change_pct).
+    Returns (vix_current, vix_5d_change_pct), or None if BOTH the history
+    fetch and the LTP fallback fail.
+
+    Fixed 2026-09-22: this used to fall back to a hardcoded 18.0 ("assume
+    normal") when both real fetches failed — same fabrication problem as
+    _fetch_nifty_vs_200ema() above; see that docstring.
+
     Rising VIX = increasing fear; falling = easing.
     """
+    from trader.kite_client import drop_incomplete_today_bar
+
     from_date = (date.today() - timedelta(days=40)).strftime("%Y-%m-%d")
     to_date = date.today().strftime("%Y-%m-%d")
 
     try:
         hist = kite.historical_data(INDIA_VIX_TOKEN, from_date, to_date, "day")
+        hist = drop_incomplete_today_bar(hist)
         closes = [c["close"] for c in hist]
         if not closes:
             raise ValueError("Empty VIX history")
@@ -155,10 +175,10 @@ def _fetch_vix(kite) -> tuple[float, float]:
         try:
             q = kite.ltp(["NSE:INDIA VIX"])
             vix = q["NSE:INDIA VIX"]["last_price"]
-            return vix, 0.0
+            return vix, 0.0   # LTP is still real data, just no 5d trend
         except Exception as e2:
             log.error(f"VIX LTP fetch also failed: {e2}")
-            return 18.0, 0.0   # assume normal
+            return None
 
 
 BREADTH_SAMPLE_SIZE = int(os.getenv("BREADTH_SAMPLE_SIZE", "20"))
@@ -218,15 +238,26 @@ def _sector_map() -> dict:
     return _SECTOR_CACHE
 
 
-def _fetch_breadth(kite, tickers: list[str], instruments_map: dict) -> float:
+def _fetch_breadth(kite, tickers: list[str], instruments_map: dict) -> Optional[float]:
     """
-    % of sampled universe tickers where LTP > 50-day SMA.
+    % of sampled universe tickers where LTP > 50-day SMA. None if not a
+    single sampled ticker could be computed (total data outage).
 
     The sample spans the whole universe rather than its top slice — see
-    _breadth_sample. Returns 50.0 (neutral) on complete failure, which is
-    itself a weakness: a total data outage is indistinguishable from a
-    genuinely balanced market. Logged loudly for that reason.
+    _breadth_sample.
+
+    Fixed 2026-09-22: this used to return a hardcoded 50.0 ("neutral") on
+    complete failure — this function's own docstring already flagged that
+    as "a weakness: a total data outage is indistinguishable from a
+    genuinely balanced market" before this fix, and it's the same
+    fabrication problem as the old Nifty/VIX hardcoded fallbacks (see
+    _fetch_nifty_vs_200ema/_fetch_vix and classify_regime). Returning None
+    lets classify_regime() treat a breadth outage the same way it now
+    treats a Nifty or VIX outage — flagged and refused, not silently
+    substituted.
     """
+    from trader.kite_client import drop_incomplete_today_bar
+
     sample = _breadth_sample(tickers)
     from_date = (date.today() - timedelta(days=100)).strftime("%Y-%m-%d")
     to_date = date.today().strftime("%Y-%m-%d")
@@ -240,6 +271,7 @@ def _fetch_breadth(kite, tickers: list[str], instruments_map: dict) -> float:
             continue
         try:
             hist = kite.historical_data(int(token), from_date, to_date, "day")
+            hist = drop_incomplete_today_bar(hist)
             closes = [c["close"] for c in hist]
             if len(closes) < 10:
                 continue
@@ -254,11 +286,10 @@ def _fetch_breadth(kite, tickers: list[str], instruments_map: dict) -> float:
     if total == 0:
         log.warning(
             "Could not compute breadth from any of the %d sampled tickers — "
-            "returning a neutral 50%%. This is a fallback, not a reading: the "
-            "regime score will be computed as if participation were exactly "
-            "balanced." % len(sample)
+            "returning None (data unavailable) rather than a fabricated "
+            "neutral reading." % len(sample)
         )
-        return 50.0
+        return None
     breadth = bullish / total * 100
     log.info(
         f"Breadth: {bullish}/{total} sampled tickers above their 50-SMA "
@@ -431,9 +462,47 @@ def classify_regime(apply_inertia: bool = True) -> RegimeReading:
         instruments_map = {}
 
     # Fetch all market data
-    nifty_ltp, nifty_vs_ema = _fetch_nifty_vs_200ema(kite)
-    vix, vix_5d_change = _fetch_vix(kite)
+    nifty_result = _fetch_nifty_vs_200ema(kite)
+    vix_result = _fetch_vix(kite)
     breadth_pct = _fetch_breadth(kite, tickers, instruments_map)
+
+    # Fixed 2026-09-22: nifty_result/vix_result are None when BOTH the real
+    # fetch and its LTP fallback failed — refuse to classify on fabricated
+    # market levels rather than silently substituting hardcoded numbers
+    # (the old 22000.0/18.0 "assume neutral/normal" fallback) that could
+    # combine with a genuinely-fetched breadth_pct to produce a confident
+    # regime read — including BULL — built on invented data. This degraded
+    # reading is deliberately NOT added to _regime_history: it isn't a real
+    # market observation, so it shouldn't participate in inertia smoothing.
+    if nifty_result is None or vix_result is None or breadth_pct is None:
+        missing = []
+        if nifty_result is None:
+            missing.append("Nifty 50")
+        if vix_result is None:
+            missing.append("India VIX")
+        if breadth_pct is None:
+            missing.append("market breadth")
+        log.error(
+            f"Regime classification data unavailable ({', '.join(missing)} — "
+            f"all fetch attempts failed) — returning a flagged, zero-confidence "
+            f"SIDEWAYS read instead of fabricating market levels."
+        )
+        return RegimeReading(
+            regime=Regime.SIDEWAYS,
+            confidence=0.0,
+            rationale=(
+                f"⚠ DATA UNAVAILABLE: {', '.join(missing)} could not be fetched "
+                f"this cycle — this is a degraded fallback read, not a genuine "
+                f"market assessment."
+            ),
+            raw_score=0.0,
+            nifty_vs_ema_pct=0.0,
+            vix=0.0,
+            breadth_pct=0.0,
+        )
+
+    nifty_ltp, nifty_vs_ema = nifty_result
+    vix, vix_5d_change = vix_result
 
     log.info(
         f"Regime inputs — Nifty: ₹{nifty_ltp:,.0f} ({nifty_vs_ema:+.1f}% vs 200-EMA) | "
