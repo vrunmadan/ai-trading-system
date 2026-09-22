@@ -778,6 +778,63 @@ def reset_qc_error_streak() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Fundamentals cache (fundamentals/screener_public.py)
+#
+# ROCE, debt/equity, growth and promoter holding change on a quarterly
+# results cycle, not intraday — refetching every research cycle (up to 7x/
+# day across the whole universe) would be pointless load on Screener's
+# public page for data that is, at most, a few hours stale. Cached here,
+# same kv_store table as the Kite token, with a freshness window the caller
+# enforces (this module only stores/retrieves — it doesn't decide "stale").
+# ---------------------------------------------------------------------------
+
+import json as _json
+
+
+def get_cached_fundamentals(ticker: str) -> tuple[dict, str] | None:
+    """
+    Returns (data, updated_at_iso) for the most recently cached fundamentals
+    snapshot for this ticker, or None if nothing is cached yet. Does NOT
+    judge freshness — that's a policy decision the caller (fundamentals/
+    screener_public.py's cached wrapper) makes, so this stays a dumb store.
+    """
+    try:
+        _ensure_kv_store()
+        with sqlite3.connect(DB_PATH) as conn:
+            row = conn.execute(
+                "SELECT value, updated_at FROM kv_store WHERE key=?",
+                (f"fundamentals:{ticker}",),
+            ).fetchone()
+        if not row:
+            return None
+        return _json.loads(row[0]), row[1]
+    except Exception:
+        return None
+
+
+def save_fundamentals_cache(ticker: str, data: dict) -> None:
+    """Upsert one ticker's fundamentals snapshot. Best-effort — a caching
+    failure must never block signal generation, so this swallows its own
+    errors rather than propagating them."""
+    try:
+        _ensure_kv_store()
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute(
+                """
+                INSERT INTO kv_store (key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE
+                    SET value = excluded.value, updated_at = excluded.updated_at
+                """,
+                (f"fundamentals:{ticker}", _json.dumps(data), now_ist()),
+            )
+            conn.commit()
+    except Exception as e:
+        log_ = __import__("logging").getLogger(__name__)
+        log_.warning(f"Could not cache fundamentals for {ticker}: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Cycle evaluation log (every stock × strategy evaluated, including PASSes)
 # ---------------------------------------------------------------------------
 

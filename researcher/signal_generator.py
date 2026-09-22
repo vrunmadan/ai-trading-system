@@ -36,6 +36,21 @@ RESEARCHER_MODEL = os.getenv("RESEARCHER_MODEL", "claude-sonnet-5")
 MIN_CONFIDENCE = float(os.getenv("MIN_SIGNAL_CONFIDENCE", "75"))
 IST = pytz.timezone("Asia/Kolkata")
 
+# Real-data fundamental quality gate (ROCE, debt/equity, growth, promoter
+# holding) -- deliberately separate from MIN_CONFIDENCE above. MIN_CONFIDENCE
+# gates Claude's own confidence_score (0.6 technical + 0.4 fundamental, where
+# fundamental_score is partly news-sentiment-driven); this gate runs BEFORE
+# Claude is even called, on real Screener.in balance-sheet/ratio data, and
+# blocks a ticker outright regardless of how strong its technical setup
+# looks. Two separate, legible checks rather than one blended score -- see
+# _passes_fundamental_gate() below. Defaults are a broad "not visibly poor
+# quality" floor, not a tight quality screen, so as not to choke paper-mode
+# signal volume while the core strategy logic is still being validated.
+FUND_MIN_ROCE = float(os.getenv("FUND_MIN_ROCE", "10"))
+FUND_MAX_DEBT_EQUITY = float(os.getenv("FUND_MAX_DEBT_EQUITY", "1.5"))
+FUND_MIN_PROFIT_GROWTH = float(os.getenv("FUND_MIN_PROFIT_GROWTH", "-15"))
+FUND_MIN_PROMOTER_HOLDING = float(os.getenv("FUND_MIN_PROMOTER_HOLDING", "25"))
+
 
 @dataclass
 class TradeSignal:
@@ -447,6 +462,115 @@ def _passes_prefilter(strategy_name: str, ind: dict) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Fundamental quality gate — real Screener.in ratio data
+# (fundamentals/screener_public.py), not news sentiment.
+# ---------------------------------------------------------------------------
+
+def _best_available_profit_growth(fundamentals: dict) -> Optional[float]:
+    """Prefer the 3-year compounded profit growth figure; fall back to the
+    5-year figure if 3-year isn't available on this company's page (some
+    thinly-covered names only show longer windows)."""
+    for key in ("profit_growth_3yr", "profit_growth_5yr"):
+        val = fundamentals.get(key)
+        if val is not None:
+            return val
+    return None
+
+
+def _passes_fundamental_gate(fundamentals: Optional[dict]) -> tuple[bool, str]:
+    """
+    Deterministic, real-data eligibility screen — separate from both the
+    technical prefilter (_passes_prefilter) and Claude's own fundamental_score.
+    Runs once per ticker, before Claude is called, on whatever ROCE, debt/
+    equity, profit growth and promoter-holding data Screener's public page
+    exposes. Any single check that fails on available data rejects the
+    ticker outright; a metric Screener didn't expose for this company is
+    simply not checked (never treated as a failure).
+
+    Fails OPEN (returns True) when no fundamentals data is available at
+    all, since a Screener outage or an unlisted symbol is an availability
+    gap, not evidence of poor quality — the technical prefilter and Claude's
+    news-based judgment still apply as before. This is the opposite of the
+    microstructure liquidity fix (2026-09-22, trader/kite_client.py), which
+    fails CLOSED on a missing Kite quote, because that gap is an execution-
+    safety unknown ("can we safely size/exit this trade") rather than a
+    supporting-context gap the system already operated without until today.
+    """
+    if not fundamentals:
+        return True, "no fundamentals data available — gate skipped"
+
+    reasons = []
+
+    roce = fundamentals.get("roce")
+    if roce is not None and roce < FUND_MIN_ROCE:
+        reasons.append(f"ROCE {roce:.1f}% < {FUND_MIN_ROCE:.0f}% floor")
+
+    debt_equity = fundamentals.get("debt_to_equity")
+    if debt_equity is not None and debt_equity > FUND_MAX_DEBT_EQUITY:
+        reasons.append(f"debt/equity {debt_equity:.2f} > {FUND_MAX_DEBT_EQUITY:.2f} ceiling")
+
+    growth = _best_available_profit_growth(fundamentals)
+    if growth is not None and growth < FUND_MIN_PROFIT_GROWTH:
+        reasons.append(f"profit growth {growth:.1f}% < {FUND_MIN_PROFIT_GROWTH:.0f}% floor")
+
+    promoter = fundamentals.get("promoter_holding")
+    if promoter is not None and promoter < FUND_MIN_PROMOTER_HOLDING:
+        reasons.append(f"promoter holding {promoter:.1f}% < {FUND_MIN_PROMOTER_HOLDING:.0f}% floor")
+
+    if reasons:
+        return False, "; ".join(reasons)
+    return True, "passed"
+
+
+def _format_fundamentals_block(fundamentals: Optional[dict]) -> str:
+    """
+    Real-data grounding block for the Claude prompt — actual ROCE, P/E,
+    growth and promoter-holding numbers from Screener.in, not headlines.
+    This is what replaces "reason about fundamentals from news alone":
+    Claude still applies the qualitative weighing rules on top, but now
+    starts from real balance-sheet context instead of a blind 60-neutral.
+    Returns "" when no data is available (already flagged separately by the
+    fundamental gate above, so the prompt just omits the section cleanly).
+    """
+    if not fundamentals:
+        return ""
+
+    def _fmt(key: str, suffix: str = "") -> Optional[str]:
+        val = fundamentals.get(key)
+        return None if val is None else f"{val:.1f}{suffix}"
+
+    lines = []
+    roce = _fmt("roce", "%")
+    roe = _fmt("roe", "%")
+    if roce or roe:
+        lines.append(f"  ROCE / ROE:              {roce or 'n/a'} / {roe or 'n/a'}")
+    pe = _fmt("pe")
+    if pe:
+        lines.append(f"  Stock P/E:               {pe}")
+    d_e = fundamentals.get("debt_to_equity")
+    if d_e is not None:
+        lines.append(f"  Debt to equity:          {d_e:.2f}")
+    sales_3y = _fmt("sales_growth_3yr", "%")
+    profit_3y = _fmt("profit_growth_3yr", "%")
+    if sales_3y or profit_3y:
+        lines.append(f"  3yr sales / profit CAGR: {sales_3y or 'n/a'} / {profit_3y or 'n/a'}")
+    promoter = fundamentals.get("promoter_holding")
+    if promoter is not None:
+        yoy = fundamentals.get("promoter_holding_change_yoy")
+        yoy_note = f" ({yoy:+.1f}pp YoY)" if yoy is not None else ""
+        lines.append(f"  Promoter holding:        {promoter:.1f}%{yoy_note}")
+
+    if not lines:
+        return ""
+
+    return (
+        "\nFUNDAMENTAL DATA (Screener.in, real balance-sheet/ratio data — "
+        "already passed the deterministic quality gate before reaching you):\n"
+        + "\n".join(lines) + "\n"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Qualitative context — Google News RSS (no API key, standard library only)
 # ---------------------------------------------------------------------------
 
@@ -551,7 +675,21 @@ RULES — these are non-negotiable:
 4. If confidence_score < {min_confidence:.0f}, return "PASS" — do not signal.
 
 QUALITATIVE WEIGHING (for fundamental_score):
-Start fundamental_score at 60 (neutral), then adjust:
+If a FUNDAMENTAL DATA block (real ROCE, debt/equity, growth, promoter holding from
+Screener.in) is present, start fundamental_score from that data, not from 60 neutral:
+  • This stock already passed a separate, stricter deterministic quality gate before
+    reaching you (real-data floor/ceiling checks) — so "present" already means
+    "not obviously poor quality." Your job is to differentiate GOOD from EXCELLENT.
+  • Strong ROCE/ROE (mid-teens or higher), low debt/equity, healthy multi-year growth,
+    and stable-or-rising promoter holding: score 65–85 before any news adjustment.
+  • Mediocre-but-passing numbers (ROCE near the floor, elevated but sub-ceiling debt,
+    flat growth, or a declining promoter-holding trend even if still above the floor):
+    score 45–65 before news — real numbers can justify a below-neutral fundamental_score
+    even without negative headlines.
+  • If the FUNDAMENTAL DATA block is absent (Screener had no data this cycle), start
+    fundamental_score at 60 (neutral) as before — this is a data-availability gap, not
+    a positive or negative signal.
+Then adjust with news, on top of that real-data baseline:
   • Company-specific NEGATIVE news (earnings miss, promoter selling, regulatory action,
     fraud allegations, plant shutdown, major debt downgrade): subtract 20–40 points.
   • Company-specific POSITIVE news (strong earnings beat, order win, capacity expansion,
@@ -561,8 +699,8 @@ Start fundamental_score at 60 (neutral), then adjust:
   • Sector tailwind (govt capex announcement, PLI scheme, demand surge): add 10–15 points.
   • Macro bearishness despite current regime (RBI hawkishness, FII outflow surge,
     global risk-off): subtract 5–10 points from confidence_score directly.
-  • If no news was fetched or headlines are irrelevant, keep fundamental_score at 60
-    and note it in rationale — do NOT invent claims.
+  • If no news was fetched or headlines are irrelevant, leave fundamental_score at
+    whatever the real-data baseline (or 60 neutral) gave you — do NOT invent claims.
   • Headlines are unverified RSS items. Use them to flag risk, not to make positive
     claims. When in doubt, discount rather than inflate.
 
@@ -591,6 +729,7 @@ def _call_claude(
     strategy: dict,
     indicators: dict,
     qual_context: str = "",
+    fundamentals: Optional[dict] = None,
 ) -> Optional[dict]:
     """
     Sends pre-computed indicators + qualitative news context to Claude Sonnet 5
@@ -620,6 +759,7 @@ def _call_claude(
         if qual_context
         else ""
     )
+    fund_block = _format_fundamentals_block(fundamentals)
 
     prompt = f"""REGIME: {regime.value.upper()}
 STRATEGY TO EVALUATE: {strategy["name"]}
@@ -640,7 +780,7 @@ Pre-computed technical indicators (from Kite Connect daily OHLCV):
   CCI(20):               {ind.get("cci_20", 0)}{cci_note}
   EMA 50/200:            {gc_note}
   Bollinger bands:       {sq_note} (bandwidth {ind.get("bb_bandwidth_pct", 0)}%){brk_note}
-{qual_block}
+{fund_block}{qual_block}
 Does this stock meet the entry criteria for the "{strategy["name"]}" strategy?
 Apply the qualitative weighing rules from your system prompt when scoring fundamental_score.
 Output your verdict as JSON."""
@@ -806,6 +946,25 @@ def generate_signal(regime_reading: RegimeReading) -> Optional[TradeSignal]:
                 )
             continue
 
+        # ---- Fundamental quality gate: real Screener.in ratio data, ----
+        # ---- separate from the technical prefilter above. Runs before ----
+        # ---- the news fetch too, so a gate-failed ticker costs nothing ----
+        # ---- beyond one (cached) fundamentals lookup. ----
+        from fundamentals.screener_public import get_fundamentals_cached
+        fundamentals = get_fundamentals_cached(ticker)
+        gate_ok, gate_reason = _passes_fundamental_gate(fundamentals)
+        if not gate_ok:
+            log.info(f"{ticker}: failed fundamental gate ({gate_reason}) — skipping cycle")
+            for strategy in baskets:
+                log_cycle_evaluation(
+                    cycle_at=cycle_at, regime=regime.value,
+                    regime_confidence=regime_reading.confidence,
+                    ticker=ticker, exchange=resolved_exchange,
+                    strategy=strategy["name"], verdict="FUNDAMENTAL_GATE_FAIL",
+                    indicators=indicators, rationale=gate_reason,
+                )
+            continue
+
         # Fetch qualitative context once per ticker — only for pre-filtered
         # candidates (shared across the strategies that passed).
         qual_context = _fetch_qualitative_context(
@@ -821,7 +980,10 @@ def generate_signal(regime_reading: RegimeReading) -> Optional[TradeSignal]:
         # Evaluate each strategy that cleared the pre-filter
         for strategy in passing:
             log.debug(f"Evaluating {ticker} ({resolved_exchange}) / {strategy['name']}")
-            verdict = _call_claude(regime, strategy, indicators, qual_context=qual_context)
+            verdict = _call_claude(
+                regime, strategy, indicators,
+                qual_context=qual_context, fundamentals=fundamentals,
+            )
             if not verdict:
                 log_cycle_evaluation(
                     cycle_at=cycle_at, regime=regime.value,
