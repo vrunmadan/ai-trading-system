@@ -528,8 +528,8 @@ def diagnose_cycle():
         from kiteconnect import KiteConnect
         from ledger.db import get_kite_token
         from universe.loader import load_universe
-        from researcher.regime_classifier import classify_regime, STRATEGY_BASKETS
-        from researcher.signal_generator import _compute_indicators, MIN_CONFIDENCE
+        from researcher.regime_classifier import classify_regime
+        from researcher.signal_generator import _compute_indicators, MIN_CONFIDENCE, STRATEGY_BASKETS, _passes_prefilter
 
         IST = pytz.timezone("Asia/Kolkata")
         now_ist = datetime.datetime.now(IST).strftime("%Y-%m-%d %H:%M IST")
@@ -599,43 +599,89 @@ def diagnose_cycle():
         strategy_names = [s["name"] for s in baskets] if baskets else []
         has_strategies = bool(baskets)
 
+        # Per-strategy human-readable flag breakdowns, purely for display.
+        # The pass/fail verdict itself is NOT reimplemented here — it comes
+        # from _passes_prefilter(), the same function the live pipeline
+        # calls (researcher/signal_generator.py) — so this panel can never
+        # again silently drift from what the pipeline actually does, or show
+        # "unknown strategy" for a basket that is genuinely in play (found
+        # 2026-09-22: bb_squeeze_break, adx_bull_strength and golden_cross_ema
+        # — the three strategies STRATEGY_BASKETS actually uses in BULL/
+        # EUPHORIA/SIDEWAYS regimes — had no case here at all and fell
+        # through to "unknown strategy" on every single row).
         def _flag_cell(ind, strategy_name):
-            """Quick rule-of-thumb eligibility check (simplified — Claude does full eval)."""
+            """Eligibility check: real verdict from _passes_prefilter, display-only flags below."""
             if not ind:
                 return "<td style='color:#888'>—</td>"
-            flags = []
+
+            all_ok = _passes_prefilter(strategy_name, ind)
+
             if strategy_name == "52wk_breakout":
-                ok_vol   = ind["volume_ratio_20d"] >= 1.5
-                ok_rsi   = 50 <= ind["rsi_14"] <= 70
-                ok_st    = ind["supertrend_10_3"] == "GREEN"
-                ok_52wk  = ind["pct_from_52wk_high"] >= -1.5
-                all_ok   = ok_vol and ok_rsi and ok_st and ok_52wk
+                ok_vol, ok_rsi = ind["volume_ratio_20d"] >= 1.5, 50 <= ind["rsi_14"] <= 70
+                ok_st, ok_52wk = ind["supertrend_10_3"] == "GREEN", ind["pct_from_52wk_high"] >= -1.5
                 flags = [f"vol {ind['volume_ratio_20d']:.1f}×{'✓' if ok_vol else '✗'}",
                          f"RSI {ind['rsi_14']:.0f}{'✓' if ok_rsi else '✗'}",
                          f"ST {ind['supertrend_10_3']}{'✓' if ok_st else '✗'}",
                          f"52wk {ind['pct_from_52wk_high']:+.1f}%{'✓' if ok_52wk else '✗'}"]
-                color = "#22c55e" if all_ok else ("#f59e0b" if sum([ok_vol, ok_rsi, ok_st, ok_52wk]) >= 2 else "#ef4444")
+                n_ok = sum([ok_vol, ok_rsi, ok_st, ok_52wk])
+            elif strategy_name == "bb_squeeze_break":
+                ok_sq, ok_brk = bool(ind.get("bb_squeeze")), bool(ind.get("bb_breaking_upper"))
+                ok_rsi = ind["rsi_14"] > 50
+                flags = [f"squeeze:{'✓' if ok_sq else '✗'}",
+                         f"breaking upper:{'✓' if ok_brk else '✗'}",
+                         f"RSI {ind['rsi_14']:.0f}{'✓' if ok_rsi else '✗'}"]
+                n_ok = sum([ok_sq, ok_brk, ok_rsi])
+            elif strategy_name == "adx_bull_strength":
+                ok_adx = ind.get("adx_14", 0.0) > 25
+                ok_di = ind.get("plus_di", 0.0) > ind.get("minus_di", 0.0)
+                ok_sma = bool(ind.get("above_sma50"))
+                flags = [f"ADX {ind.get('adx_14', 0.0):.0f}{'✓' if ok_adx else '✗'}",
+                         f"+DI>-DI:{'✓' if ok_di else '✗'}",
+                         f">SMA50:{'✓' if ok_sma else '✗'}"]
+                n_ok = sum([ok_adx, ok_di, ok_sma])
+            elif strategy_name == "golden_cross_ema":
+                ok_ema = bool(ind.get("ema50_above_ema200"))
+                ok_recent = bool(ind.get("golden_cross_recent"))
+                flags = [f"EMA50>EMA200:{'✓' if ok_ema else '✗'}",
+                         f"cross recent:{'✓' if ok_recent else '✗'}"]
+                n_ok = sum([ok_ema, ok_recent])
             elif strategy_name == "supertrend_buy":
                 ok_flip  = ind["supertrend_just_flipped"]
                 ok_rsi   = 40 <= ind["rsi_14"] <= 65
                 ok_sma   = ind["above_sma50"]
-                all_ok   = ok_flip and ok_rsi and ok_sma
                 flags = [f"flipped:{'✓' if ok_flip else '✗'}",
                          f"RSI {ind['rsi_14']:.0f}{'✓' if ok_rsi else '✗'}",
                          f">SMA50:{'✓' if ok_sma else '✗'}"]
-                color = "#22c55e" if all_ok else ("#f59e0b" if sum([ok_flip, ok_rsi, ok_sma]) >= 2 else "#ef4444")
+                n_ok = sum([ok_flip, ok_rsi, ok_sma])
             elif strategy_name == "rsi_mean_reversion":
                 ok_rsi   = ind["rsi_14"] < 35
                 ok_bb    = ind["bollinger_position"] < 25
                 ok_52wk  = ind["pct_from_52wk_high"] > -20
-                all_ok   = ok_rsi and ok_bb and ok_52wk
                 flags = [f"RSI {ind['rsi_14']:.0f}{'✓' if ok_rsi else '✗'}",
                          f"BB {ind['bollinger_position']:.0f}%{'✓' if ok_bb else '✗'}",
                          f"52wk {ind['pct_from_52wk_high']:+.1f}%{'✓' if ok_52wk else '✗'}"]
-                color = "#22c55e" if all_ok else ("#f59e0b" if sum([ok_rsi, ok_bb, ok_52wk]) >= 2 else "#ef4444")
+                n_ok = sum([ok_rsi, ok_bb, ok_52wk])
+            elif strategy_name == "cci_recovery":
+                cci = ind.get("cci_20", 0.0)
+                ok_cci = -100 < cci < -20
+                flags = [f"CCI {cci:.0f}{'✓' if ok_cci else '✗'}"]
+                n_ok = 1 if ok_cci else 0
+            elif strategy_name == "bb_mean_reversion":
+                ok_bb, ok_rsi = ind["bollinger_position"] < 20, ind["rsi_14"] < 40
+                flags = [f"BB {ind['bollinger_position']:.0f}%{'✓' if ok_bb else '✗'}",
+                         f"RSI {ind['rsi_14']:.0f}{'✓' if ok_rsi else '✗'}"]
+                n_ok = sum([ok_bb, ok_rsi])
             else:
-                flags = ["unknown strategy"]
-                color = "#888"
+                # Matches _passes_prefilter's own fail-open default for a
+                # strategy name it doesn't recognise either.
+                flags = [f"no display rule for '{strategy_name}' — prefilter itself: "
+                         f"{'PASS (fail-open, unknown strategy)' if all_ok else 'fail'}"]
+                n_ok = None
+
+            if n_ok is None:
+                color = "#22c55e" if all_ok else "#ef4444"
+            else:
+                color = "#22c55e" if all_ok else ("#f59e0b" if n_ok >= max(1, len(flags) - 1) else "#ef4444")
             cell_bg = f"background:{color}22"
             return f"<td style='{cell_bg};font-size:11px;padding:4px'>{' | '.join(flags)}</td>"
 
