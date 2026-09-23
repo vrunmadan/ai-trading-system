@@ -1,0 +1,335 @@
+Universe: 250 symbols from streak_backtests\microcap250.csv | 10y daily (Yahoo Finance)
+Fetching Nifty + India VIX for regime tagging...
+
+  CUPID: done (2479 bars)
+  ICIL: done (2479 bars)
+  PARAS: done (1235 bars)
+  VIKRAMSOLR: done (271 bars)
+  NEOGEN: done (1831 bars)
+  ZAGGLE: done (745 bars)
+  MANORAMA: done (1049 bars)
+  TDPOWERSYS: done (2479 bars)
+  ETHOSLTD: done (1071 bars)
+  AVALON: done (854 bars)
+  INDIAGLYCO: done (2479 bars)
+  AZAD: done (681 bars)
+  BALUFORGE: done (601 bars)
+  RBA: done (1432 bars)
+  AEQUS: thin history (199 bars) — skipped
+  BLUESTONE: done (275 bars)
+  WABAG: done (2479 bars)
+  RUBICON: thin history (234 bars) — skipped
+  APOLLO: done (2145 bars)
+  MARKSANS: done (2479 bars)
+  STLTECH: done (2479 bars)
+  LLOYDSENGG: done (2479 bars)
+  GNFC: done (2479 bars)
+  MSTCLTD: done (1854 bars)
+  MTARTECH: done (1371 bars)
+  WAKEFIT: thin history (195 bars) — skipped
+  UJJIVANSFB: done (1684 bars)
+  BECTORFOOD: done (1425 bars)
+  MOIL: done (2479 bars)
+  SUDARSCHEM: done (2478 bars)
+  RAIN: done (2479 bars)
+  KTKBANK: done (2479 bars)
+  SANSERA: done (1240 bars)
+  KPIGREEN: done (1281 bars)
+  MIDHANI: done (2098 bars)
+  KRN: done (494 bars)
+  PCJEWELLER: done (2479 bars)
+  SHRIPISTON: done (2478 bars)
+  SKYGOLD: done (920 bars)
+  ASTRAMICRO: done (2479 bars)
+  LLOYDSENT: done (483 bars)
+  TI: done (2479 bars)
+  AETHER: done (1069 bars)
+  JSFB: done (648 bars)
+  THANGAMAYL: done (2479 bars)
+  HAPPSTMNDS: done (1493 bars)
+  ARVIND: done (2479 bars)
+  SHILPAMED: done (2479 bars)
+  PRAJIND: done (2479 bars)
+  QPOWER: done (394 bars)
+  GOKEX: done (2479 bars)
+  SMLMAH: done (2479 bars)
+  NAZARA: done (1361 bars)
+  RELIGARE: done (2478 bars)
+  TANLA: done (2479 bars)
+  DIACABS: done (2479 bars)
+  EMIL: done (977 bars)
+  ATLANTAELE: thin history (247 bars) — skipped
+  AHLUCONT: done (2479 bars)
+  DYNAMATECH: done (2478 bars)
+  AXISCADES: done (2479 bars)
+  WEBELSOLAR: done (2479 bars)
+  BLACKBUCK: done (459 bars)
+  VIYASH: done (2479 bars)
+  JYOTHYLAB: done (2479 bars)
+  GAEL: done (2479 bars)
+  RENUKA: done (2479 bars)
+  UTLSOLAR: thin history (213 bars) — skipped
+  QUESS: done (2479 bars)
+  AGARWALEYE: done (405 bars)
+  SUPRIYA: done (1175 bars)
+  PRIVISCL: done (2477 bars)
+  GPPL: done (2479 bars)
+  FIEMIND: done (2479 bars)
+  VGUARD: done (2478 bars)
+  RATEGAIN: done (1182 bars)
+  BBOX: done (2479 bars)
+  KRBL: done (2478 bars)
+  INOXGREEN: done (952 bars)
+  TRIVENI: done (2478 bars)
+  PICCADIL: done (308 bars)
+  AARTIPHARM: done (905 bars)
+  INOXINDIA: done (684 bars)
+  EQUITASBNK: done (1462 bars)
+  VARROC: done (2030 bars)
+  JAYNECOIND: done (2479 bars)
+  TIMETECHNO: done (2479 bars)
+  PRICOLLTD: done (2478 bars)
+  CMSINFO: done (1173 bars)
+  PURVA: done (2478 bars)
+  HCC: done (2479 bars)
+  OSWALPUMPS: done (317 bars)
+  SOUTHBANK: done (2479 bars)
+  STAR: done (2479 bars)
+  GREAVESCOT: done (2479 bars)
+  SHAILY: done (1110 bars)
+  GRWRHITECH: done (1150 bars)
+  PTC: done (2479 bars)
+  SKFINDIA: done (2479 bars)
+  JSLL: done (1090 bars)
+  JKPAPER: done (2478 bars)
+  SENCO: done (793 bars)
+  ASHAPURMIN: done (2479 bars)
+  LUMAXTECH: done (2478 bars)
+  EPL: done (2478 bars)
+  AKUMS: done (531 bars)
+  ALIVUS: done (1272 bars)
+  KSCL: done (2478 bars)
+  GMMPFAUDLR: done (2117 bars)
+  EDELWEISS: done (2479 bars)
+  YATHARTH: done (777 bars)
+  MASTEK: done (2479 bars)
+  THYROCARE: done (2479 bars)
+  ASKAUTOLTD: done (710 bars)
+  AVANTIFEED: done (2478 bars)
+  SKIPPER: done (2478 bars)
+  ENTERO: done (645 bars)
+  BORORENEW: done (2062 bars)
+  BALAMINES: done (2479 bars)
+  RATNAMANI: done (2478 bars)
+  V2RETAIL: done (2479 bars)
+  KIRLPNU: done (847 bars)
+  MANYAVAR: done (1140 bars)
+  INDIGOPNTS: done (1399 bars)
+  RTNPOWER: done (2479 bars)
+  SPARC: done (2479 bars)
+  BANCOINDIA: done (2478 bars)
+  TRANSRAILL: done (436 bars)
+  MEDPLUS: done (1177 bars)
+  RELAXO: done (2478 bars)
+  SHAREINDIA: done (1491 bars)
+  POWERMECH: done (2478 bars)
+  LXCHEM: done (1363 bars)
+  SHARDACROP: done (2478 bars)
+  TIPSMUSIC: done (2479 bars)
+  ARVINDFASN: done (1867 bars)
+  DCBBANK: done (2479 bars)
+  VOLTAMP: done (2479 bars)
+  WELENT: done (2479 bars)
+  EMBDL: done (2479 bars)
+  RALLIS: done (2479 bars)
+  JAMNAAUTO: done (2479 bars)
+  BAJAJELEC: done (2479 bars)
+  GODREJAGRO: done (2213 bars)
+  JUSTDIAL: done (2479 bars)
+  SWSOLAR: done (1760 bars)
+  AVL: done (468 bars)
+  IMFA: done (2479 bars)
+  CAMPUS: done (1088 bars)
+  CSBBANK: done (1690 bars)
+  SHAKTIPUMP: done (2479 bars)
+  GSFC: done (2479 bars)
+  IFBIND: done (2479 bars)
+  SFL: done (2423 bars)
+  JAIBALAJI: done (2479 bars)
+  ELLEN: done (309 bars)
+  PNGJL: done (505 bars)
+  SURYAROSNI: done (2479 bars)
+  AURIONPRO: done (2479 bars)
+  PNCINFRA: done (2479 bars)
+  RTNINDIA: done (2479 bars)
+  CCAVENUE: done (2479 bars)
+  KITEX: done (2479 bars)
+  KNRCON: done (2479 bars)
+  VIPIND: done (2478 bars)
+  PGIL: done (2479 bars)
+  LOTUSDEV: done (284 bars)
+  EIEL: done (455 bars)
+  CELLO: done (714 bars)
+  WEWORK: thin history (238 bars) — skipped
+  RAYMONDLSL: done (513 bars)
+  GMRP&UI: done (1118 bars)
+  IONEXCHANG: done (1136 bars)
+  ROUTE: done (1491 bars)
+  MAHSEAMLES: done (2479 bars)
+  NETWORK18: done (2479 bars)
+  REFEX: done (2478 bars)
+  FEDFINA: done (699 bars)
+  GOKULAGRO: done (2478 bars)
+  SUDEEPPHRM: thin history (207 bars) — skipped
+  STARCEMENT: done (2293 bars)
+  FINPIPE: done (2477 bars)
+  JLHL: done (748 bars)
+  JKLAKSHMI: done (2479 bars)
+  HCG: done (2479 bars)
+  SMARTWORKS: done (297 bars)
+  RCF: done (2479 bars)
+  SAMHI: done (745 bars)
+  PARKHOSPS: thin history (194 bars) — skipped
+  NFL: done (2479 bars)
+  KIRLOSBROS: done (2479 bars)
+  METROPOLIS: done (1844 bars)
+  SKFINDUS: thin history (199 bars) — skipped
+  ADVENZYMES: done (2479 bars)
+  OPTIEMUS: done (2258 bars)
+  VAIBHAVGBL: done (2477 bars)
+  EUREKAFORB: done (508 bars)
+  ALKYLAMINE: done (2479 bars)
+  CAPILLARY: thin history (212 bars) — skipped
+  TEXRAIL: done (2479 bars)
+  TMB: done (997 bars)
+  STYRENIX: done (2479 bars)
+  DBREALTY: done (2479 bars)
+  IXIGO: done (568 bars)
+  GHCL: done (2479 bars)
+  HERITGFOOD: done (2479 bars)
+  WAAREERTL: done (365 bars)
+  SANDUMA: done (755 bars)
+  DATAMATICS: done (2479 bars)
+  VMART: done (2478 bars)
+  PRUDENT: done (1078 bars)
+  SAATVIKGL: thin history (249 bars) — skipped
+  INDIASHLTR: done (683 bars)
+  GRINDWELL: done (2478 bars)
+  IIFLCAPS: done (1737 bars)
+  SUBROS: done (2478 bars)
+  CRAMC: thin history (236 bars) — skipped
+  REDTAPE: done (773 bars)
+  TARC: done (1427 bars)
+  THOMASCOOK: done (2479 bars)
+  APLLTD: done (2479 bars)
+  ACI: done (953 bars)
+  ELECTCAST: done (2479 bars)
+  AARTIDRUGS: done (2479 bars)
+  ASHOKA: done (2479 bars)
+  MAHSCOOTER: done (2477 bars)
+  HGINFRA: done (2114 bars)
+  KANSAINER: done (2477 bars)
+  CORONA: thin history (195 bars) — skipped
+  TVSSCS: done (765 bars)
+  ALOKINDS: done (2479 bars)
+  CRIZAC: done (304 bars)
+  STYL: thin history (247 bars) — skipped
+  ANUP: done (1871 bars)
+  HEMIPROP: done (1469 bars)
+  SUNTECK: done (2479 bars)
+  CERA: done (2478 bars)
+  KSB: done (2479 bars)
+  PRSMJOHNSN: done (2477 bars)
+  DBL: done (2477 bars)
+  CENTURYPLY: done (2478 bars)
+  AWFIS: done (580 bars)
+  BIRLACORPN: done (2478 bars)
+  SAFARI: done (1742 bars)
+  ORKLAINDIA: thin history (223 bars) — skipped
+  WESTLIFE: done (1760 bars)
+  NESCO: done (2477 bars)
+  ORIENTCEM: done (2478 bars)
+  SANOFICONR: done (505 bars)
+  TSFINV: done (2102 bars)
+
+==============================================================================
+REGIME BASKET VIEW  |  streak_backtests\microcap250.csv  |  235 symbols  |  10y
+Exit = 20% trailing (+ -7% hard stop). Trade tagged by regime AT ENTRY.
+==============================================================================
+
+52wk_breakout
+                     Trades   Win%  AvgWin%  Expect%     PF   MaxDD%
+  BULL                  576   29.0     32.7     3.91   1.70    -50.3
+  EUPHORIA              564   31.7     34.6     5.63   2.05    -39.4
+  SIDEWAYS              165   35.2     36.8     8.19   2.73    -12.1
+  BEAR                   38   42.1     37.2    11.59   3.85     -5.7
+  CRASH                   7   57.1     30.4    13.85   4.94     -1.6
+  ALL                  1353   31.3     34.2     5.40   2.01    -40.6
+
+supertrend_buy
+                     Trades   Win%  AvgWin%  Expect%     PF   MaxDD%
+  BULL                 1077   19.7     33.4     0.32   1.05   -178.7
+  EUPHORIA              531   29.0     36.9     5.23   1.96    -46.1
+  SIDEWAYS              598   31.1     43.6     8.22   2.54    -28.7
+  BEAR                  171   34.5     34.6     7.12   2.48    -22.4
+  CRASH                  50   56.0     45.8    22.48   8.08     -6.6
+  ALL                  2433   26.4     37.9     4.34   1.76    -40.2
+
+golden_cross_ema
+                     Trades   Win%  AvgWin%  Expect%     PF   MaxDD%
+  BULL                  582   24.9     49.3     6.39   2.08    -38.4
+  EUPHORIA              192   26.6     40.0     4.95   1.88    -25.5
+  SIDEWAYS              180   30.0     39.9     6.53   2.20    -35.7
+  BEAR                   48   52.1     24.4     9.15   3.56    -14.1
+  CRASH                  17   35.3     68.9    19.06   4.64    -11.3
+  ALL                  1026   27.6     43.8     6.42   2.14    -39.4
+
+adx_bull_strength
+                     Trades   Win%  AvgWin%  Expect%     PF   MaxDD%
+  BULL                 1564   23.7     41.0     3.80   1.64    -57.4
+  EUPHORIA              981   28.5     33.0     3.83   1.68    -48.8
+  SIDEWAYS              634   30.0     39.8     6.41   2.16    -45.8
+  BEAR                  139   36.0     32.4     6.93   2.46    -16.0
+  CRASH                  60   51.7     62.5    28.36   8.21    -13.1
+  ALL                  3395   27.3     38.6     4.88   1.86    -55.5
+
+bb_squeeze_break
+                     Trades   Win%  AvgWin%  Expect%     PF   MaxDD%
+  BULL                 1464   25.2     41.3     4.68   1.82    -99.9
+  EUPHORIA              891   31.2     36.4     6.02   2.13    -31.3
+  SIDEWAYS              636   26.6     31.1     2.79   1.51    -70.5
+  BEAR                  148   43.9     26.6     7.72   2.95    -21.3
+  CRASH                  78   59.0     74.9    41.21  15.04     -6.6
+  ALL                  3221   28.8     38.6     5.72   2.05    -55.7
+
+bb_mean_reversion
+                     Trades   Win%  AvgWin%  Expect%     PF   MaxDD%
+  BULL                 2234   22.2     37.5     2.25   1.37   -110.8
+  EUPHORIA              818   25.9     40.5     4.73   1.82    -42.0
+  SIDEWAYS             1526   18.2     31.7    -0.53   0.92   -400.0
+  BEAR                  742   38.4     37.0     9.68   3.13    -20.3
+  CRASH                 375   15.5     41.6    -0.34   0.95    -72.3
+  ALL                  5698   23.4     36.8     2.68   1.45   -140.3
+
+rsi_mean_reversion
+                     Trades   Win%  AvgWin%  Expect%     PF   MaxDD%
+  BULL                 2679   21.1     37.5     1.80   1.30   -191.3
+  EUPHORIA              767   25.6     34.1     2.86   1.49    -52.3
+  SIDEWAYS             2199   19.7     34.2     0.57   1.09   -192.6
+  BEAR                 1186   36.6     34.6     7.91   2.67    -35.2
+  CRASH                 728   21.4     50.7     4.57   1.73    -53.7
+  ALL                  7564   23.6     36.7     2.77   1.47   -102.2
+
+cci_recovery
+                     Trades   Win%  AvgWin%  Expect%     PF   MaxDD%
+  BULL                 3617   21.3     36.7     1.72   1.28   -140.4
+  EUPHORIA             1313   25.7     38.2     3.94   1.67    -52.7
+  SIDEWAYS             2712   23.2     36.9     2.60   1.44    -88.9
+  BEAR                 1391   35.4     34.4     7.41   2.55    -30.2
+  CRASH                 348   46.6     62.6    24.86   6.82    -14.4
+  ALL                  9404   25.5     38.1     3.98   1.69    -80.3
+
+==============================================================================
+Read down each strategy: the regimes where it shows PF>1.3 AND positive Expect% are
+the regimes it belongs in. That's your STRATEGY_BASKETS mapping, from evidence.
+Regime = Nifty vs 200-EMA + India VIX (breadth omitted). Cost 120 bps/trade applied; survivorship NOT modeled.

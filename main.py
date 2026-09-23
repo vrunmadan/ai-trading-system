@@ -128,7 +128,7 @@ def run_cycle() -> None:
     # ----------------------------------------------------------------
     try:
         from risk_manager.portfolio_risk import check_portfolio_risk
-        from universe.loader import load_universe
+        from universe.loader import load_scan_universe as load_universe
 
         cycle_mode = "PAPER" if PAPER_MODE else "LIVE"
         raw_positions = get_open_positions(mode=cycle_mode)

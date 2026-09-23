@@ -15,6 +15,7 @@ parser without hitting the network.
 import pytest
 
 from fundamentals.screener_public import (
+    PARSER_VERSION,
     parse_fundamentals_page,
     fetch_fundamentals,
     get_fundamentals_cached,
@@ -269,7 +270,7 @@ class TestGetFundamentalsCached:
         return dt.strftime("%Y-%m-%d %H:%M:%S")
 
     def test_fresh_cache_hit_skips_live_fetch(self, monkeypatch):
-        cached_data = {"roce": 12.3}
+        cached_data = {"roce": 12.3, "_parser_version": PARSER_VERSION}
         fresh_ts = self._ts_days_before_now(1)  # well within the 7-day default
         monkeypatch.setattr(
             "ledger.db.get_cached_fundamentals", lambda t: (cached_data, fresh_ts)
@@ -384,4 +385,62 @@ class TestGetFundamentalsCached:
         result = get_fundamentals_cached("RELIANCE", max_age_days=1)
 
         assert result == fresh_data  # 3 days > 1-day window -> refetched
+
+
+# ---------------------------------------------------------------------------
+# Pledge + sector (added 2026-09-23) — markup verified live on SPICEJET and
+# RBLBANK: section#analysis > div.cons > ul > li, and #peers a[title=...].
+# ---------------------------------------------------------------------------
+
+_CONS_WITH_PLEDGE = """
+<section id="analysis"><div class="flex">
+  <div class="pros"><ul><li>Company has reduced debt.</li></ul></div>
+  <div class="cons"><ul>
+    <li>Promoter holding is low: 24.2%</li>
+    <li>Promoters have pledged 39.8% of their holding.</li>
+  </ul></div>
+</div></section>
+<section id="peers"><p class="sub">
+  <a href="/market/IN05/" title="Broad Sector">Services</a>
+  <a href="/market/IN05/IN0501/" title="Sector">Services</a>
+  <a href="/market/x/" title="Broad Industry">Transport Services</a>
+  <a href="/market/y/" title="Industry">Airline</a>
+</p></section>
+"""
+
+
+class TestPledgeAndSector:
+    def test_pledge_parsed_from_cons(self):
+        d = parse_fundamentals_page(f"<html><body>{_CONS_WITH_PLEDGE}</body></html>")
+        assert d["promoter_pledge_pct"] == 39.8
+
+    def test_cons_without_pledge_line_means_zero(self):
+        html = _CONS_WITH_PLEDGE.replace(
+            "<li>Promoters have pledged 39.8% of their holding.</li>", "")
+        d = parse_fundamentals_page(f"<html><body>{html}</body></html>")
+        assert d["promoter_pledge_pct"] == 0.0
+
+    def test_no_cons_section_means_unknown_not_zero(self):
+        d = parse_fundamentals_page(FIXTURE_HTML)
+        assert "promoter_pledge_pct" not in d
+
+    def test_sector_parsed_from_peers(self):
+        d = parse_fundamentals_page(f"<html><body>{_CONS_WITH_PLEDGE}</body></html>")
+        assert d["broad_sector"] == "Services"
+        assert d["industry"] == "Airline"
+
+    def test_parser_version_stamped_only_when_data_found(self):
+        assert parse_fundamentals_page(FIXTURE_HTML)["_parser_version"] == PARSER_VERSION
+        assert parse_fundamentals_page("<html><body></body></html>") == {}
+
+    def test_old_parser_cache_entry_is_refetched(self, monkeypatch):
+        monkeypatch.setattr("ledger.db.now_ist", lambda: "2026-09-23 10:00:00")
+        monkeypatch.setattr("ledger.db.get_cached_fundamentals",
+                            lambda t: ({"roce": 12.0}, "2026-09-22 10:00:00"))
+        monkeypatch.setattr("ledger.db.save_fundamentals_cache", lambda t, d: None)
+        fresh = {"roce": 12.0, "promoter_pledge_pct": 0.0,
+                 "_parser_version": PARSER_VERSION}
+        monkeypatch.setattr("fundamentals.screener_public.fetch_fundamentals",
+                            lambda *a, **k: fresh)
+        assert get_fundamentals_cached("X") == fresh
 

@@ -72,3 +72,37 @@ def load_universe() -> list[UniverseEntry]:
 def get_tickers() -> list[str]:
     """Convenience wrapper — returns just the ticker symbols."""
     return [e.ticker for e in load_universe() if e.ticker]
+
+
+def load_scan_universe() -> list[UniverseEntry]:
+    """
+    What the research cycle actually scans: the core universe.csv PLUS the
+    weekly discovery list (universe/discovery.py), de-duplicated, core
+    first. Set DISCOVERY_ENABLED=false to scan the core list only. Any
+    failure reading the discovery list degrades to core-only, never raises.
+    """
+    core = load_universe()
+    if os.getenv("DISCOVERY_ENABLED", "true").lower() == "false":
+        return core
+    try:
+        from universe.discovery import load_discovery_entries
+        extra = load_discovery_entries()
+    except Exception:
+        extra = []
+    seen = {e.ticker for e in core}
+    out = list(core)
+    for d in extra:
+        t = str(d.get("ticker", "")).upper()
+        if not t or t in seen:
+            continue
+        seen.add(t)
+        out.append(UniverseEntry(
+            ticker=t,
+            company_name=d.get("company", t),
+            sector=d.get("sector", "UNKNOWN"),
+            market_cap_cr=float(d.get("market_cap_cr") or 0),
+            exchange=d.get("exchange", "NSE"),
+            notes="Discovery",
+        ))
+    return out
+

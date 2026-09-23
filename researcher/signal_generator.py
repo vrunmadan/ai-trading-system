@@ -58,6 +58,10 @@ FUND_MIN_PROMOTER_HOLDING = float(os.getenv("FUND_MIN_PROMOTER_HOLDING", "25"))
 # ROCE/D-E/promoter checks are skipped and ROE is used as the return floor.
 # (Bug found 2026-09-23: RBLBANK was rejected on "ROCE 5.8% < 10%".)
 FUND_MIN_ROE_FINANCIALS = float(os.getenv("FUND_MIN_ROE_FINANCIALS", "8"))
+# Promoter pledge ceiling (all sectors). Heavily pledged promoter stakes are
+# the classic small-cap blow-up path: a price fall triggers margin calls,
+# forced selling, a deeper fall. Screener reports it in its CONS list.
+FUND_MAX_PROMOTER_PLEDGE = float(os.getenv("FUND_MAX_PROMOTER_PLEDGE", "20"))
 FINANCIAL_SECTORS = {"FINANCIAL SERVICES"}
 
 
@@ -554,6 +558,12 @@ def _passes_fundamental_gate(
 
     reasons = []
 
+    pledge = fundamentals.get("promoter_pledge_pct")
+    if pledge is not None and pledge > FUND_MAX_PROMOTER_PLEDGE:
+        reasons.append(
+            f"promoter pledge {pledge:.1f}% > {FUND_MAX_PROMOTER_PLEDGE:.0f}% ceiling"
+        )
+
     if _is_financial(sector):
         # Lender-appropriate screen: ROE floor + profit growth only.
         roe = fundamentals.get("roe")
@@ -628,6 +638,9 @@ def _format_fundamentals_block(fundamentals: Optional[dict]) -> str:
         yoy = fundamentals.get("promoter_holding_change_yoy")
         yoy_note = f" ({yoy:+.1f}pp YoY)" if yoy is not None else ""
         lines.append(f"  Promoter holding:        {promoter:.1f}%{yoy_note}")
+    pledge = fundamentals.get("promoter_pledge_pct")
+    if pledge is not None:
+        lines.append(f"  Promoter pledge:         {pledge:.1f}% of promoter stake")
 
     if not lines:
         return ""
@@ -919,7 +932,8 @@ def generate_signal(
     kite = get_kite_client()
 
     # Load universe with sector + exchange info
-    universe_entries = load_universe()
+    from universe.loader import load_scan_universe
+    universe_entries = load_scan_universe()  # core + weekly discovery list
     sector_map = {e.ticker: e.sector for e in universe_entries}
     exchange_map = {e.ticker: e.exchange for e in universe_entries}
     tickers = [e.ticker for e in universe_entries]

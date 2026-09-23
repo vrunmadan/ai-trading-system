@@ -85,7 +85,8 @@ def scan_env(monkeypatch):
 
     monkeypatch.setattr(kc, "get_kite_client", lambda: FakeKite())
     monkeypatch.setattr(kc, "drop_incomplete_today_bar", lambda h, **k: h)
-    monkeypatch.setattr(sg, "load_universe", lambda: [
+    import universe.loader as ul
+    monkeypatch.setattr(ul, "load_scan_universe", lambda: [
         UniverseEntry("GABRIEL", "Gabriel", "AUTOMOBILE", 0, "NSE", ""),
         UniverseEntry("IKS", "IKS", "HEALTHCARE SERVICES", 0, "NSE", ""),
     ])

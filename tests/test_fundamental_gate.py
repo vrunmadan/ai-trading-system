@@ -197,6 +197,36 @@ class TestFinancialsScreen:
         assert ok is False
 
 
+class TestPledgeCeiling:
+    def setup_method(self):
+        self._orig = sg.FUND_MAX_PROMOTER_PLEDGE
+        sg.FUND_MAX_PROMOTER_PLEDGE = 20.0
+
+    def teardown_method(self):
+        sg.FUND_MAX_PROMOTER_PLEDGE = self._orig
+
+    def test_heavy_pledge_rejects(self):
+        ok, reason = sg._passes_fundamental_gate(
+            {"roce": 20.0, "promoter_pledge_pct": 39.8})
+        assert ok is False and "pledge" in reason
+
+    def test_heavy_pledge_rejects_financials_too(self):
+        ok, reason = sg._passes_fundamental_gate(
+            {"roe": 15.0, "promoter_pledge_pct": 45.0}, sector="FINANCIAL SERVICES")
+        assert ok is False and "pledge" in reason
+
+    def test_small_or_zero_pledge_passes(self):
+        assert sg._passes_fundamental_gate({"roce": 20.0, "promoter_pledge_pct": 5.0})[0]
+        assert sg._passes_fundamental_gate({"roce": 20.0, "promoter_pledge_pct": 0.0})[0]
+
+    def test_unknown_pledge_is_not_a_failure(self):
+        assert sg._passes_fundamental_gate({"roce": 20.0})[0]
+
+    def test_pledge_shown_to_claude(self):
+        assert "Promoter pledge" in sg._format_fundamentals_block(
+            {"roce": 20.0, "promoter_pledge_pct": 12.5})
+
+
 class TestFormatFundamentalsBlock:
     def test_none_returns_empty_string(self):
         assert sg._format_fundamentals_block(None) == ""

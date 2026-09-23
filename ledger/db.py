@@ -795,6 +795,34 @@ def reset_qc_error_streak() -> None:
         pass
 
 
+def kv_get(key: str) -> tuple[str, str] | None:
+    """(value, updated_at) for a kv_store key, or None. Never raises."""
+    try:
+        _ensure_kv_store()
+        with sqlite3.connect(DB_PATH) as conn:
+            row = conn.execute(
+                "SELECT value, updated_at FROM kv_store WHERE key=?", (key,)
+            ).fetchone()
+        return (row[0], row[1]) if row else None
+    except Exception:
+        return None
+
+
+def kv_set(key: str, value: str) -> None:
+    """Upsert a kv_store key (raises on failure — callers decide)."""
+    _ensure_kv_store()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO kv_store (key, value, updated_at) VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE
+                SET value = excluded.value, updated_at = excluded.updated_at
+            """,
+            (key, value, now_ist()),
+        )
+        conn.commit()
+
+
 # ---------------------------------------------------------------------------
 # Fundamentals cache (fundamentals/screener_public.py)
 #

@@ -47,9 +47,9 @@ guessed):
   #shareholding table.data-table — "Promoters", "FIIs", "DIIs",
       "Government", "Public" rows, one column per quarter. Used for the
       promoter-holding level and its trend (rising/falling), a real
-      governance signal — NOT the same as promoter PLEDGE, which Screener's
-      public page does not expose; that still needs an NSE shareholding-
-      pattern filing if Varun wants pledge data specifically.
+      governance signal — NOT the same as promoter PLEDGE, which is not in
+      this table; pledge comes from the CONS list instead (see
+      _parse_pledge, added 2026-09-23).
 
 This structure is a live website's markup, not a versioned API — it WILL
 drift eventually. Every field extraction below fails independently and
@@ -223,6 +223,58 @@ def _parse_shareholding(soup: BeautifulSoup) -> dict:
     return out
 
 
+# Bump when parse_fundamentals_page() starts returning new fields, so cached
+# snapshots written by an older parser are refetched instead of silently
+# lacking the new fields for up to DEFAULT_MAX_AGE_DAYS.
+PARSER_VERSION = 2
+
+_PLEDGE_RE = re.compile(r"Promoters have pledged\s+([\d.]+)\s*%", re.I)
+
+
+def _parse_pledge(soup: BeautifulSoup) -> dict:
+    """
+    Promoter pledge, from Screener's machine-generated CONS list
+    (section#analysis div.cons li), e.g. "Promoters have pledged 39.8% of
+    their holding." Verified live 2026-09-23 on SPICEJET (39.8%) and absent
+    on RBLBANK/GABRIEL. Screener only emits that line when there IS a
+    pledge, so: line found -> the %; cons list present but no pledge line
+    -> 0.0 (reported as none); no cons list at all -> absent (unknown).
+    The earlier docstring note that the public page has no pledge data was
+    wrong about the cons list — the shareholding TABLE doesn't carry it.
+    """
+    section = soup.find(id="analysis")
+    if not section:
+        return {}
+    cons = section.find("div", class_="cons")
+    if not cons:
+        return {}
+    for li in cons.find_all("li"):
+        m = _PLEDGE_RE.search(li.get_text(" ", strip=True))
+        if m:
+            try:
+                return {"promoter_pledge_pct": float(m.group(1))}
+            except ValueError:
+                return {}
+    return {"promoter_pledge_pct": 0.0}
+
+
+def _parse_sector(soup: BeautifulSoup) -> dict:
+    """#peers 'Broad Sector' / 'Industry' links (verified live 2026-09-23:
+    RBLBANK -> Financial Services / Private Sector Bank). Used to classify
+    discovery-list names that aren't in any index file."""
+    out: dict = {}
+    peers = soup.find(id="peers")
+    if not peers:
+        return out
+    for a in peers.find_all("a"):
+        title = (a.get("title") or "").strip()
+        if title == "Broad Sector":
+            out["broad_sector"] = a.get_text(strip=True)
+        elif title == "Industry":
+            out["industry"] = a.get_text(strip=True)
+    return out
+
+
 def parse_fundamentals_page(html: str) -> dict:
     """
     Pure parsing function — no network. Takes a Screener company page's raw
@@ -254,10 +306,15 @@ def parse_fundamentals_page(html: str) -> dict:
     result["debt_to_equity"] = _parse_balance_sheet_debt_equity(soup)
 
     result.update(_parse_shareholding(soup))
+    result.update(_parse_pledge(soup))
+    result.update(_parse_sector(soup))
 
     # Drop keys that came back empty so callers never mistake "not found"
     # for "found and genuinely zero".
-    return {k: v for k, v in result.items() if v is not None}
+    cleaned = {k: v for k, v in result.items() if v is not None}
+    if cleaned:
+        cleaned["_parser_version"] = PARSER_VERSION
+    return cleaned
 
 
 def fetch_fundamentals(symbol: str, session: Optional[requests.Session] = None,
@@ -349,7 +406,9 @@ def get_fundamentals_cached(
             )
         except Exception:
             age = None
-        if age is not None and age <= timedelta(days=max_age_days):
+        fresh_enough = age is not None and age <= timedelta(days=max_age_days)
+        current_parser = (data or {}).get("_parser_version", 1) >= PARSER_VERSION
+        if fresh_enough and current_parser:
             return data
 
     fresh = fetch_fundamentals(symbol, session=session)

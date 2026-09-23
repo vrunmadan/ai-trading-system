@@ -1162,6 +1162,30 @@ def refresh_universe():
         return make_response(_html_response("Error", str(e), False), 500)
 
 
+@app.route("/run_discovery", methods=["GET"])
+def run_discovery_now():
+    """
+    Kick off the weekly discovery job now (it takes ~10-20 minutes: Kite
+    history for every liquid candidate + polite Screener fetches), in a
+    background thread. The result arrives by email, same as the Monday run.
+
+    Usage:
+      /run_discovery?secret=<APPROVAL_SECRET>
+    """
+    import threading
+    from flask import make_response
+
+    if not _check_diagnostic_secret(request.args.get("secret", "")):
+        log.warning(f"Rejected unauthenticated request to {request.path}")
+        return make_response(_html_response("Forbidden", "Wrong or missing secret.", False), 403)
+
+    threading.Thread(target=_safe_run_discovery, daemon=True, name="discovery").start()
+    return make_response(_html_response(
+        "Discovery started",
+        "Building the discovery list in the background — the report arrives "
+        "by email in roughly 10-20 minutes.", True), 202)
+
+
 # ---------------------------------------------------------------------------
 # Scheduler in background thread
 # ---------------------------------------------------------------------------
@@ -1226,14 +1250,18 @@ def _start_scheduler():
             name="Weekly Gemini audit",
         )
 
-        # Universe refresh + discovery: Sunday 20:00 IST
-        # Runs a fundamental screen across ALL ~5000+ listed NSE+BSE stocks,
-        # surfaces new candidates and flags degraded universe stocks.
+        # Weekly discovery list: Monday 16:05 IST (universe/discovery.py).
+        # Replaces the Sunday Screener-premium screen, which needed a login
+        # this deployment never had and so never produced a list. Monday
+        # after the close because the job needs a live Kite token (only
+        # refreshed by the weekday-morning login) and a full day's quotes,
+        # and it must not compete with the hourly cycles for Kite's rate limit.
         scheduler.add_job(
-            func=_safe_run_universe_refresh,
-            trigger=CronTrigger(day_of_week="sun", hour=20, minute=0, timezone=IST),
-            id="universe_refresh",
-            name="Weekly universe discovery (Screener.in)",
+            func=_safe_run_discovery,
+            trigger=CronTrigger(day_of_week="mon", hour=16, minute=5, timezone=IST),
+            id="weekly_discovery",
+            name="Weekly discovery list (Kite + Screener public pages)",
+            max_instances=1,
         )
 
         scheduler.start()
@@ -1292,6 +1320,14 @@ def _safe_run_audit():
         run_weekly_audit()
     except Exception as e:
         log.error(f"Weekly audit error: {e}", exc_info=True)
+
+
+def _safe_run_discovery():
+    try:
+        from universe.discovery import run_and_email
+        run_and_email()
+    except Exception as e:
+        log.error(f"Discovery job error: {e}", exc_info=True)
 
 
 def _safe_run_universe_refresh():
