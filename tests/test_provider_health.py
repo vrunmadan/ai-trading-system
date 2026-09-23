@@ -242,3 +242,27 @@ def test_a_live_qc_error_streak_degrades_even_when_probes_pass(monkeypatch):
     out = ph.check_all_providers(force=True)
     assert out["ok"] is False
     assert out["qc_consecutive_errors"] == 4
+
+
+def test_openai_probe_hitting_its_token_budget_counts_as_healthy(monkeypatch):
+    """2026-09-23: gpt-5.5 (reasoning model) can't answer within the probe's
+    tiny budget and returns a 400 'max_tokens or model output limit was
+    reached'. The request was accepted and processed — key, quota and model
+    are fine — so this must not mark QC as down (it had pinned /status at
+    'degraded' while real QC calls were succeeding)."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    _fake_openai(monkeypatch, exc=_Err(
+        "Error code: 400 - {'error': {'message': 'Could not finish the message "
+        "because max_tokens or model output limit was reached. Please try again "
+        "with higher max_tokens.', 'type': 'invalid_request_error'}}", 400))
+    r = ph.check_provider("openai", force=True)
+    assert r["ok"] is True
+
+
+def test_openai_other_400s_still_fail(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    _fake_openai(monkeypatch, exc=_Err(
+        "Error code: 400 - {'error': {'message': 'Unsupported parameter', "
+        "'type': 'invalid_request_error'}}", 400))
+    r = ph.check_provider("openai", force=True)
+    assert r["ok"] is False

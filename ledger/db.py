@@ -384,6 +384,24 @@ def count_signals_today(ticker: str, status: str) -> int:
     return row["n"] if row else 0
 
 
+def get_tickers_signalled_today() -> set[str]:
+    """Tickers with ANY signals-table row logged today (IST), any status.
+
+    Any status counts (alerted, QC-blocked, dropped pre-QC): intraday inputs
+    are frozen on completed daily bars, so re-evaluating the same ticker later
+    the same day just repeats the same decision. See generate_signal().
+    """
+    import datetime
+    import pytz
+
+    d = datetime.datetime.now(pytz.timezone("Asia/Kolkata")).strftime("%Y-%m-%d")
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT ticker FROM signals WHERE DATE(created_at)=?", (d,),
+        ).fetchall()
+    return {r["ticker"] for r in rows}
+
+
 # ---------------------------------------------------------------------------
 # Trade logging
 # ---------------------------------------------------------------------------

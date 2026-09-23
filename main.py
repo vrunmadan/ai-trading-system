@@ -204,8 +204,22 @@ def run_cycle() -> None:
     # ----------------------------------------------------------------
     # Step 2: Signal generation
     # ----------------------------------------------------------------
+    # One slot per cycle: don't let a name that already fired today, or one
+    # we already hold, win it again — let the next-best candidate through.
+    exclude: dict[str, str] = {}
     try:
-        signal = generate_signal(regime_reading)
+        from ledger.db import get_tickers_signalled_today
+        for _pos in raw_positions:
+            exclude[_pos["ticker"]] = "SKIP_ALREADY_HELD"
+        for t in get_tickers_signalled_today():
+            exclude.setdefault(t, "SKIP_SIGNALLED_TODAY")
+    except Exception as e:
+        # Fail open on the exclusion list: worst case is a repeat alert,
+        # which is noise, not risk (every alert still needs approval).
+        log.error(f"Could not build signal exclusion list: {e}", exc_info=True)
+
+    try:
+        signal = generate_signal(regime_reading, exclude_tickers=exclude)
     except Exception as e:
         log.error(f"Signal generation crashed: {e}", exc_info=True)
         # Never silent: a wholesale crash means candidates may have been found

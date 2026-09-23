@@ -142,6 +142,61 @@ class TestPassesFundamentalGate:
         assert ok is True
 
 
+class TestFinancialsScreen:
+    """2026-09-23: RBLBANK was rejected on 'ROCE 5.8% < 10% floor'. ROCE,
+    debt/equity and promoter holding are the wrong yardsticks for lenders
+    (structurally low ROCE, structurally high leverage, often widely held),
+    so FINANCIAL SERVICES names are screened on ROE + profit growth instead."""
+
+    def setup_method(self):
+        self._orig = (sg.FUND_MIN_ROE_FINANCIALS, sg.FUND_MIN_PROFIT_GROWTH)
+        sg.FUND_MIN_ROE_FINANCIALS = 8.0
+        sg.FUND_MIN_PROFIT_GROWTH = -15.0
+
+    def teardown_method(self):
+        sg.FUND_MIN_ROE_FINANCIALS, sg.FUND_MIN_PROFIT_GROWTH = self._orig
+
+    def _bank(self, **o):
+        base = {"roce": 5.8, "roe": 14.0, "debt_to_equity": 7.5,
+                "promoter_holding": 0.0, "profit_growth_3yr": 12.0}
+        base.update(o)
+        return base
+
+    def test_bank_not_rejected_on_roce_de_or_promoter(self):
+        ok, reason = sg._passes_fundamental_gate(self._bank(), sector="FINANCIAL SERVICES")
+        assert ok is True, reason
+        assert "financials" in reason
+
+    def test_same_numbers_still_rejected_for_non_financial(self):
+        ok, reason = sg._passes_fundamental_gate(self._bank(), sector="AUTOMOBILE")
+        assert ok is False
+        assert "ROCE" in reason
+
+    def test_sector_match_is_case_and_space_insensitive(self):
+        ok, _ = sg._passes_fundamental_gate(self._bank(), sector="  financial services ")
+        assert ok is True
+
+    def test_low_roe_rejects_financial(self):
+        ok, reason = sg._passes_fundamental_gate(self._bank(roe=4.0), sector="FINANCIAL SERVICES")
+        assert ok is False
+        assert "ROE" in reason
+
+    def test_growth_floor_still_applies_to_financials(self):
+        ok, reason = sg._passes_fundamental_gate(
+            self._bank(profit_growth_3yr=-40.0), sector="FINANCIAL SERVICES")
+        assert ok is False
+        assert "profit growth" in reason
+
+    def test_missing_roe_is_not_a_failure(self):
+        data = self._bank(); data.pop("roe")
+        ok, _ = sg._passes_fundamental_gate(data, sector="FINANCIAL SERVICES")
+        assert ok is True
+
+    def test_no_sector_keeps_original_behaviour(self):
+        ok, _ = sg._passes_fundamental_gate(self._bank())
+        assert ok is False
+
+
 class TestFormatFundamentalsBlock:
     def test_none_returns_empty_string(self):
         assert sg._format_fundamentals_block(None) == ""

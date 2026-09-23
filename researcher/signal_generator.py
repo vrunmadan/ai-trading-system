@@ -50,6 +50,19 @@ FUND_MIN_ROCE = float(os.getenv("FUND_MIN_ROCE", "10"))
 FUND_MAX_DEBT_EQUITY = float(os.getenv("FUND_MAX_DEBT_EQUITY", "1.5"))
 FUND_MIN_PROFIT_GROWTH = float(os.getenv("FUND_MIN_PROFIT_GROWTH", "-15"))
 FUND_MIN_PROMOTER_HOLDING = float(os.getenv("FUND_MIN_PROMOTER_HOLDING", "25"))
+# Financials (banks, NBFCs, insurers, AMCs, exchanges — universe sector
+# "FINANCIAL SERVICES") are screened differently: ROCE and debt/equity are
+# meaningless for a lender (deposits/borrowings ARE the raw material, so D/E
+# is structurally 5-10x and ROCE is structurally single-digit), and most large
+# private banks are widely held with little or no promoter stake. For these,
+# ROCE/D-E/promoter checks are skipped and ROE is used as the return floor.
+# (Bug found 2026-09-23: RBLBANK was rejected on "ROCE 5.8% < 10%".)
+FUND_MIN_ROE_FINANCIALS = float(os.getenv("FUND_MIN_ROE_FINANCIALS", "8"))
+FINANCIAL_SECTORS = {"FINANCIAL SERVICES"}
+
+
+def _is_financial(sector: Optional[str]) -> bool:
+    return (sector or "").strip().upper() in FINANCIAL_SECTORS
 
 
 @dataclass
@@ -515,7 +528,9 @@ def _best_available_profit_growth(fundamentals: dict) -> Optional[float]:
     return None
 
 
-def _passes_fundamental_gate(fundamentals: Optional[dict]) -> tuple[bool, str]:
+def _passes_fundamental_gate(
+    fundamentals: Optional[dict], sector: Optional[str] = None,
+) -> tuple[bool, str]:
     """
     Deterministic, real-data eligibility screen — separate from both the
     technical prefilter (_passes_prefilter) and Claude's own fundamental_score.
@@ -538,6 +553,22 @@ def _passes_fundamental_gate(fundamentals: Optional[dict]) -> tuple[bool, str]:
         return True, "no fundamentals data available — gate skipped"
 
     reasons = []
+
+    if _is_financial(sector):
+        # Lender-appropriate screen: ROE floor + profit growth only.
+        roe = fundamentals.get("roe")
+        if roe is not None and roe < FUND_MIN_ROE_FINANCIALS:
+            reasons.append(
+                f"ROE {roe:.1f}% < {FUND_MIN_ROE_FINANCIALS:.0f}% floor (financials)"
+            )
+        growth = _best_available_profit_growth(fundamentals)
+        if growth is not None and growth < FUND_MIN_PROFIT_GROWTH:
+            reasons.append(
+                f"profit growth {growth:.1f}% < {FUND_MIN_PROFIT_GROWTH:.0f}% floor"
+            )
+        if reasons:
+            return False, "; ".join(reasons)
+        return True, "passed (financials screen)"
 
     roce = fundamentals.get("roce")
     if roce is not None and roce < FUND_MIN_ROCE:
@@ -856,14 +887,26 @@ Output your verdict as JSON."""
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def generate_signal(regime_reading: RegimeReading) -> Optional[TradeSignal]:
+def generate_signal(
+    regime_reading: RegimeReading,
+    exclude_tickers: Optional[dict] = None,
+) -> Optional[TradeSignal]:
     """
     Scans the universe, evaluates each ticker for the regime's strategy basket,
     returns the single highest-conviction signal above MIN_CONFIDENCE, or None.
 
     Returns None far more often than a TradeSignal. Frequency is the honest
     output of the threshold — not a target to optimise.
+
+    exclude_tickers: {ticker: verdict_label} for names that must not compete
+    for this cycle's slot — already signalled today, or already held. Since
+    2026-09-22 indicators are built on COMPLETED daily bars only, so a ticker
+    that won at 09:15 sees identical inputs every hour until tomorrow; without
+    this it re-wins every cycle and crowds out every other candidate (seen
+    2026-09-23: GABRIEL alerted 7x while IKS/SYRMA cleared 65% and were never
+    sent). Excluded tickers are logged to cycle_log and skip the Claude call.
     """
+    exclude_tickers = exclude_tickers or {}
     regime = regime_reading.regime
     baskets = STRATEGY_BASKETS.get(regime, [])
 
@@ -985,13 +1028,27 @@ def generate_signal(regime_reading: RegimeReading) -> Optional[TradeSignal]:
                 )
             continue
 
+        # ---- Already signalled today / already held: don't re-compete ----
+        if ticker in exclude_tickers:
+            for strategy in passing:
+                log_cycle_evaluation(
+                    cycle_at=cycle_at, regime=regime.value,
+                    regime_confidence=regime_reading.confidence,
+                    ticker=ticker, exchange=resolved_exchange,
+                    strategy=strategy["name"], verdict=exclude_tickers[ticker],
+                    indicators=indicators,
+                )
+            continue
+
         # ---- Fundamental quality gate: real Screener.in ratio data, ----
         # ---- separate from the technical prefilter above. Runs before ----
         # ---- the news fetch too, so a gate-failed ticker costs nothing ----
         # ---- beyond one (cached) fundamentals lookup. ----
         from fundamentals.screener_public import get_fundamentals_cached
         fundamentals = get_fundamentals_cached(ticker)
-        gate_ok, gate_reason = _passes_fundamental_gate(fundamentals)
+        gate_ok, gate_reason = _passes_fundamental_gate(
+            fundamentals, sector=sector_map.get(ticker),
+        )
         if not gate_ok:
             log.info(f"{ticker}: failed fundamental gate ({gate_reason}) — skipping cycle")
             for strategy in baskets:

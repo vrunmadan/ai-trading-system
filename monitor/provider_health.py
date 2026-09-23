@@ -107,12 +107,29 @@ def _probe_openai() -> dict:
         client.chat.completions.create(
             model=os.getenv("QC_MODEL", "gpt-5.5"),
             # gpt-5.5 requires max_completion_tokens, not max_tokens (else 400).
-            max_completion_tokens=1,
+            # It is a reasoning model: the budget must cover hidden reasoning
+            # tokens too, so 1 always failed with "max_tokens or model output
+            # limit was reached" and /status sat permanently "degraded" while
+            # real QC calls succeeded (found 2026-09-23).
+            max_completion_tokens=64,
             messages=[{"role": "user", "content": "ping"}],
         )
         return _result(True)
     except Exception as e:
+        if _is_output_limit_error(e):
+            # The request was authenticated, accepted and processed by the
+            # model — only our deliberately tiny budget ran out. That proves
+            # key, quota and model availability, which is all this probe is for.
+            return _result(True, note="probe hit its token budget (reachable, quota OK)")
         return _result(False, error_class=_classify(e), detail=str(e))
+
+
+def _is_output_limit_error(exc: Exception) -> bool:
+    blob = str(exc).lower()
+    return (
+        "max_tokens or model output limit was reached" in blob
+        or ("max_completion_tokens" in blob and "limit" in blob and "reached" in blob)
+    )
 
 
 def _probe_anthropic() -> dict:
