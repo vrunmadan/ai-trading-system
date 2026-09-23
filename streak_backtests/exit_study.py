@@ -105,7 +105,8 @@ def main():
         ctx = build_ctx(H, L, C, V)
         entries = [any(STRATEGIES[s](ctx, i) for s in LIVE) for i in range(len(C))]
         n10 = 2480
-        bh10 = C[-1] / C[-n10] if len(C) >= n10 * 0.95 and C[-min(n10, len(C))] > 0 else None
+        start = C[-min(n10, len(C))]
+        bh10 = C[-1] / start if len(C) >= n10 * 0.95 and start > 0 else None
         row = {"ticker": tk, "tier": tier, "bh_10y": round(bh10, 2) if bh10 else ""}
         for v, (ta, tb) in VARIANTS.items():
             tr = sim(C, H, L, entries, ta, tb, COST.get(tier, 1.0))
