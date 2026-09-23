@@ -185,6 +185,9 @@ def _run_cycle_to_qc(monkeypatch, ledger, signal, sizing, qc_verdict, spy, send_
     import main
 
     monkeypatch.setattr(main, "PAPER_MODE", True, raising=False)
+    # These tests pin the human-approval alert path; auto-approval has its
+    # own tests (test_paper_auto_approve.py).
+    monkeypatch.setattr(main, "PAPER_AUTO_APPROVE", False, raising=False)
 
     import alerts.gmail_alert as ga
     monkeypatch.setattr(ga, "send_plain_email", spy)

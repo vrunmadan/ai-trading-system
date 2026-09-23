@@ -297,7 +297,12 @@ def log_signal(
 def update_signal_alert_sent(signal_id: int):
     with get_db() as conn:
         conn.execute(
-            "UPDATE signals SET alert_sent_at=?, status='PENDING' WHERE id=?",
+            # Never downgrade a signal that was already answered (PAPER
+            # auto-approval runs BEFORE the alert is sent, so this used to
+            # flip an APPROVED paper trade's signal back to PENDING).
+            "UPDATE signals SET alert_sent_at=?, status=CASE "
+            "WHEN status IN ('APPROVED','EXECUTED','NOT_EXECUTED','REJECTED') "
+            "THEN status ELSE 'PENDING' END WHERE id=?",
             (now_ist(), signal_id),
         )
 

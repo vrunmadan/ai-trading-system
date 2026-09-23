@@ -203,6 +203,7 @@ def test_agree_verdict_produces_an_actionable_alert_end_to_end(
     """
     ga, spy = alert_env
     import main
+    monkeypatch.setattr(main, "PAPER_AUTO_APPROVE", False)
 
     import risk_manager.portfolio_risk as pr
 
@@ -256,9 +257,14 @@ def test_agree_verdict_produces_an_actionable_alert_end_to_end(
     assert "action=approve" in html and "action=reject" in html
 
 
-def _run_cycle_with_agree(ledger, signal, monkeypatch):
-    """Shared setup: drive main.run_cycle() to a clean AGREE alert."""
+def _run_cycle_with_agree(ledger, signal, monkeypatch, auto_approve=False):
+    """Shared setup: drive main.run_cycle() to a clean AGREE alert.
+
+    Auto-approval is off by default here: these tests pin the human-approval
+    alert path (status stays PENDING until a click). Auto-approval has its
+    own tests in test_paper_auto_approve.py."""
     import main
+    monkeypatch.setattr(main, "PAPER_AUTO_APPROVE", auto_approve)
 
     import risk_manager.portfolio_risk as pr
 
@@ -366,6 +372,7 @@ def test_agree_does_not_trip_the_qc_error_streak(
 
     ga, spy = alert_env
     import main
+    monkeypatch.setattr(main, "PAPER_AUTO_APPROVE", False)
 
     import risk_manager.portfolio_risk as pr
 

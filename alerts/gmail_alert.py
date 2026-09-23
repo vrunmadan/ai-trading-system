@@ -414,7 +414,7 @@ _REJECT_STATUS_REFUSAL["APPROVED"] = (
 )
 
 
-def handle_email_action(action: str, signal_id: int):
+def handle_email_action(action: str, signal_id: int, auto: bool = False):
     """
     Called by webhook_server.py when the user taps Approve or Reject.
 
@@ -425,7 +425,15 @@ def handle_email_action(action: str, signal_id: int):
     once in Kite's own interface. We never call the trading API automatically.
 
     For 'reject': kite_basket_url is None — just show a confirmation HTML page.
+
+    auto=True: called by main.run_cycle's PAPER auto-approval, not by a
+    human tap. Refused outright in LIVE mode (a real order must always be a
+    human decision), and the separate "paper trade recorded" email is
+    skipped because the trade alert itself already says it was auto-approved.
     """
+    if auto and _current_mode() != "PAPER":
+        log.error(f"Refusing auto-approval of signal {signal_id}: not in PAPER mode.")
+        return "Auto-approval is only allowed in PAPER mode.", False, None
     from ledger.db import (
         get_db,
         get_live_trade_for_signal,
@@ -779,16 +787,17 @@ def handle_email_action(action: str, signal_id: int):
                 f"recorded PENDING ({direction} {quantity}×{exchange}:{ticker} "
                 f"@ ~₹{expected_price:,.2f}); no Kite order will be placed."
             )
-            send_plain_email(
-                subject=f"📝 Paper trade recorded — {ticker} {direction} #{signal_id}",
-                body=(
-                    f"You approved signal #{signal_id}.\n"
-                    f"Paper trade recorded: {direction} {quantity} × {exchange}:{ticker} "
-                    f"@ ~₹{expected_price:,.2f}.\n\n"
-                    f"No real order was placed — this is a simulation. It will be "
-                    f"marked filled once reconciliation runs."
-                ),
-            )
+            if not auto:
+                send_plain_email(
+                    subject=f"📝 Paper trade recorded — {ticker} {direction} #{signal_id}",
+                    body=(
+                        f"You approved signal #{signal_id}.\n"
+                        f"Paper trade recorded: {direction} {quantity} × {exchange}:{ticker} "
+                        f"@ ~₹{expected_price:,.2f}.\n\n"
+                        f"No real order was placed — this is a simulation. It will be "
+                        f"marked filled once reconciliation runs."
+                    ),
+                )
             return (
                 f"Paper trade recorded: {direction} {quantity} × {exchange}:{ticker} "
                 f"(trade #{trade_id}, pending fill simulation). No real order was placed.",

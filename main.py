@@ -34,6 +34,13 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 PAPER_MODE = os.getenv("PAPER_MODE", "true").lower() == "true"
+# Paper-mode auto-approval (2026-09-23). Every signal that reaches the alert
+# step (i.e. not QC-blocked/errored, not dropped by the sizer) becomes a
+# paper trade automatically, so the paper record measures the SYSTEM —
+# sizing, concurrent positions, the trailing-stop exit — not which alerts
+# happened to get clicked. Never applies in LIVE (enforced again inside
+# handle_email_action). Set PAPER_AUTO_APPROVE=false to go back to clicking.
+PAPER_AUTO_APPROVE = os.getenv("PAPER_AUTO_APPROVE", "true").lower() == "true"
 
 # Consecutive failed QC calls before one ops alert goes out. The
 # per-signal "trade blocked" alert is unconditional; this only governs
@@ -446,6 +453,20 @@ def run_cycle() -> None:
     # success path makes alert_sent_at mean what its name says. It is
     # write-only elsewhere in the codebase (nothing currently reads it to
     # gate behavior), so this reordering changes nothing else.
+    if PAPER_MODE and PAPER_AUTO_APPROVE:
+        try:
+            from alerts.gmail_alert import handle_email_action
+            msg, ok, _ = handle_email_action("approve", signal_id, auto=True)
+            if ok:
+                log.info(f"Signal #{signal_id} auto-approved (PAPER): {msg}")
+                risk_flags.insert(0, "AUTO-APPROVED as a PAPER trade (PAPER_AUTO_APPROVE) — "
+                                     "no action needed; the links below are informational.")
+            else:
+                log.warning(f"Auto-approval refused for signal #{signal_id}: {msg}")
+                risk_flags.insert(0, f"Auto-approval was refused: {msg}")
+        except Exception as e:
+            log.error(f"Auto-approval failed for signal #{signal_id}: {e}", exc_info=True)
+
     try:
         sent = send_trade_alert(signal_id, signal, qc_verdict, sizing, risk_flags=risk_flags)
         if sent:
