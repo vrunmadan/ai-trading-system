@@ -1,0 +1,70 @@
+MULTIBAGGER STUDY — today's Midcap150 / Smallcap250 / Microcap250 members
+==============================================================================
+
+10-year buy-and-hold multiples (stocks with full 10-year history)
+tier             n   >=3x   >=5x  >=10x  <1x (lost)   median
+Midcap150      102     68     41     16           5     4.60
+Smallcap250    145     93     66     30          11     4.23
+Microcap250    132     77     54     29          12     3.87
+
+5-year buy-and-hold multiples (stocks with full 5-year history)
+tier             n   >=3x   >=5x  >=10x  <1x (lost)   median
+Midcap150      127     40     18      5          26     2.02
+Smallcap250    192     63     37     15          41     2.08
+Microcap250    169     56     35     14          45     1.81
+
+Was < ₹1,000 Cr ~10y ago (est.): 55 stocks; 53 of them went >=5x, 41 went >=10x
+  where those >=5x sit today: Midcap150=0, Smallcap250=16, Microcap250=37
+  ticker      tier now      cap then  cap now     B&H  engine trades
+  TIPSMUSIC   Microcap250         63     8549  135.4x  17.10x     22
+  CUPID       Microcap250        301    36824  122.3x  10.94x     25
+  REFEX       Microcap250         33     3934  120.0x   1.41x     34
+  LLOYDSENGG  Microcap250        243    14182   58.5x   4.29x     25
+  OLECTRA     Smallcap250        181    10473   58.0x   4.02x     24
+  GRAVITA     Smallcap250        201    11371   56.7x  11.39x     27
+  BBOX        Microcap250        293    14383   49.0x   2.44x     24
+  THANGAMAYL  Microcap250        375    16526   44.1x   3.63x     24
+  USHAMART    Smallcap250        372    16287   43.8x   1.60x     32
+  TDPOWERSYS  Microcap250        549    24014   43.7x   0.81x     31
+  TI          Microcap250        376    14911   39.6x   4.54x     29
+  PGEL        Smallcap250        444    14931   33.6x   9.63x     27
+  SARDAEN     Smallcap250        554    17829   32.2x   7.80x     23
+  GOKULAGRO   Microcap250        210     6663   31.8x   1.54x     36
+  PGIL        Microcap250        382    12017   31.4x   3.65x     28
+  ACE         Smallcap250        490    14925   30.5x   6.39x     21
+  ANANTRAJ    Smallcap250        815    22737   27.9x   5.23x     29
+  LUMAXTECH   Microcap250        515    13938   27.1x   0.08x     41
+  JAIBALAJI   Microcap250        241     6092   25.3x  29.69x     20
+  HBLENGINE   Smallcap250        849    21187   24.9x   2.90x     34
+  SAREGAMA    Smallcap250        405     9732   24.0x   4.96x     21
+  SHAKTIPUMP  Microcap250        255     5884   23.0x   6.62x     27
+  V2RETAIL    Microcap250        359     7863   21.9x  24.40x     21
+  WEBELSOLAR  Microcap250        155     3210   20.7x  13.51x     23
+  ZENTEC      Smallcap250        748    15041   20.1x   8.44x     25
+  PCBL        Smallcap250        723    13592   18.8x  14.82x     18
+  JWL         Smallcap250        537     9965   18.6x   6.34x     29
+  GPIL        Smallcap250        840    15272   18.2x   3.49x     25
+  IMFA        Microcap250        379     6831   18.0x   4.78x     24
+  TARIL       Smallcap250        515     8675   16.9x   0.53x     34
+  ELECON      Smallcap250        638    10471   16.4x   1.25x     30
+  LTFOODS     Smallcap250        920    14932   16.2x   3.00x     21
+  ALKYLAMINE  Microcap250        603     9631   16.0x   2.73x     19
+  VOLTAMP     Microcap250        713    10925   15.3x   1.17x     31
+  TANLA       Microcap250        443     6608   14.9x   0.91x     29
+  MASTEK      Microcap250        343     4878   14.2x   4.95x     20
+  WELENT      Microcap250        742    10497   14.1x   2.63x     27
+  AURIONPRO   Microcap250        272     3709   13.6x   2.96x     33
+  JAYNECOIND  Microcap250        704     8871   12.6x   0.64x     35
+  DATAMATICS  Microcap250        423     4669   11.0x   1.45x     31
+
+Was < ₹1,000 Cr ~5y ago (est.): 19 stocks; 18 of them went >=5x, 14 went >=10x
+  where those >=5x sit today: Midcap150=0, Smallcap250=1, Microcap250=17
+
+Engine capture on all 161 10y >=5x stocks: median engine/B&H = 0.24 (1.00 = kept the whole move)
+  engine turned them into >=5x itself: 35, >=2x: 105, lost money: 17
+Engine per-stock compounded result, Midcap150: median x1.81, lost money on 35/146
+Engine per-stock compounded result, Smallcap250: median x1.60, lost money on 67/240
+Engine per-stock compounded result, Microcap250: median x1.30, lost money on 86/231
+
+Caveats: today's members only (survivorship); est. caps ignore dilution;
+engine figures trade one stock in isolation (no portfolio, no slot competition).

@@ -72,6 +72,10 @@ def engine_compound(C, H, L, V, cost):
 
 
 def main():
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")  # Windows console is cp1252; the report has ₹
+    except Exception:
+        pass
     rows = []
     with open(os.path.join(ROOT, "universe", "universe.csv"), newline="", encoding="utf-8") as f:
         uni = [(r["Ticker"], r.get("Notes", "")) for r in csv.DictReader(f)]
