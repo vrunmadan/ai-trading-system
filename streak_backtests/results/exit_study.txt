@@ -1,0 +1,72 @@
+EXIT STUDY — same entries, different exits (20/30/40% trail, split 20+40)
+======================================================================================
+
+Midcap150
+  exit   trades   win%  avg/trade     PF  days held  stock median  stocks lost  kept of 5x+
+  T20      2265   29.4      7.57%   2.52         28         1.81x          24%        0.25
+  T30      1548   25.3     19.45%   4.58         30         2.03x          19%        0.38
+  T40      1111   23.4     41.76%   8.42         31         2.51x          17%        0.53
+  SPLIT    1111   29.1     26.20%   6.25         31         2.13x          15%        0.43
+  (143 stocks; 41 were >=5x over 10y buy-and-hold)
+
+Smallcap250
+  exit   trades   win%  avg/trade     PF  days held  stock median  stocks lost  kept of 5x+
+  T20      3910   29.8      6.44%   2.27         20         1.59x          28%        0.24
+  T30      2817   24.2     15.74%   3.74         23         1.87x          25%        0.43
+  T40      2157   21.6     32.85%   6.46         24         2.00x          24%        0.63
+  SPLIT    2157   26.8     20.04%   4.79         24         1.82x          20%        0.39
+  (232 stocks; 63 were >=5x over 10y buy-and-hold)
+
+Microcap250
+  exit   trades   win%  avg/trade     PF  days held  stock median  stocks lost  kept of 5x+
+  T20      3741   29.1      5.68%   2.06         20         1.31x          37%        0.23
+  T30      2794   23.8     14.23%   3.34         22         1.62x          30%        0.44
+  T40      2223   20.5     26.67%   5.15         22         1.81x          28%        0.46
+  SPLIT    2223   25.1     16.11%   3.84         22         1.69x          27%        0.30
+  (220 stocks; 52 were >=5x over 10y buy-and-hold)
+
+ALL
+  exit   trades   win%  avg/trade     PF  days held  stock median  stocks lost  kept of 5x+
+  T20      9916   29.5      6.41%   2.24         21         1.55x          30%        0.24
+  T30      7159   24.3     15.95%   3.75         24         1.81x          25%        0.42
+  T40      5491   21.5     32.15%   6.27         24         2.03x          24%        0.52
+  SPLIT    5491   26.6     19.69%   4.66         24         1.86x          22%        0.37
+  (595 stocks; 156 were >=5x over 10y buy-and-hold)
+
+10y >=10x stocks — engine multiple per exit (buy-and-hold for reference)
+  ticker      tier              B&H      T20      T30      T40    SPLIT
+  TIPSMUSIC   Microcap250    135.4x   17.13x   13.93x   29.59x   18.81x
+  CUPID       Microcap250    122.3x   10.94x    6.33x   25.18x   27.20x
+  REFEX       Microcap250    120.0x    1.41x    0.62x    4.63x    2.73x
+  LLOYDSENGG  Microcap250     58.5x    4.29x   11.64x   29.56x   17.00x
+  OLECTRA     Smallcap250     58.0x    4.04x    4.69x    4.13x    4.87x
+  GRAVITA     Smallcap250     56.7x   11.39x   22.28x   38.15x   16.11x
+  BBOX        Microcap250     49.0x    2.44x    6.99x   12.69x    6.20x
+  RADICO      Midcap150       44.8x    4.75x   11.12x   15.35x    9.24x
+  WELCORP     Smallcap250     44.6x    5.42x   18.46x   35.61x   17.74x
+  THANGAMAYL  Microcap250     44.1x    3.68x   10.94x    9.92x    5.58x
+  USHAMART    Smallcap250     43.8x    1.61x    5.00x   21.16x   12.21x
+  TDPOWERSYS  Microcap250     43.7x    0.81x   11.78x   25.31x   15.42x
+  KEI         Midcap150       42.1x    3.65x   26.61x   19.55x    8.80x
+  TI          Microcap250     39.6x    4.56x   10.75x   20.62x    9.29x
+  APARINDS    Midcap150       35.8x    2.67x   10.90x   14.94x    8.05x
+  FACT        Smallcap250     35.2x    3.97x    4.91x    3.30x    3.14x
+  BSE         Midcap150       34.3x    5.71x   18.52x   50.12x   18.98x
+  JSL         Midcap150       33.8x    6.56x    5.76x   13.13x    9.50x
+  PGEL        Smallcap250     33.6x   10.21x   27.43x   13.91x   10.80x
+  SARDAEN     Smallcap250     32.2x    8.01x   18.36x   41.64x   21.93x
+  GOKULAGRO   Microcap250     31.8x    1.62x    1.87x   10.55x    5.55x
+  PGIL        Microcap250     31.4x    3.86x    9.94x    7.05x    4.20x
+  ACE         Smallcap250     30.5x    6.44x   41.83x   33.57x   10.60x
+  ANANTRAJ    Smallcap250     27.9x    5.79x   11.14x   17.49x   10.36x
+  LUMAXTECH   Microcap250     27.1x    0.09x    0.24x    1.52x    0.78x
+  JAIBALAJI   Microcap250     25.3x   29.69x   30.17x   27.33x   13.64x
+  HBLENGINE   Smallcap250     24.9x    3.17x    7.93x   23.18x   13.90x
+  APLAPOLLO   Midcap150       24.8x   11.01x   19.85x   18.31x   13.38x
+  UNOMINDA    Midcap150       24.7x    6.12x    9.08x    9.54x    6.77x
+  COFORGE     Midcap150       24.6x    6.00x    7.95x    5.86x    3.07x
+
+Excluded for suspicious one-day price jumps (21): MOTILALOFS, PATANJALI, YESBANK, ABFRL, ABREL, CGCL, CDSL, GPIL, INDIAMART, J&KBANK, AHLUCONT, ALOKINDS, CCAVENUE, INDIAGLYCO, JSLL, PARAS, QUESS, REDTAPE, SKFINDIA, STAR, THYROCARE
+Caveats: today's members only (survivorship flatters every variant equally);
+each stock traded alone — wider trails also hold positions longer, which in the
+real portfolio means fewer free slots for new signals (see 'days held').
