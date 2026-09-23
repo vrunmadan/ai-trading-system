@@ -102,7 +102,8 @@ class TradeSignal:
 #     from a consolidation catch the next trend leg.
 #   • BEAR/CRASH stay empty: the backtest's "edge" there was hold-into-recovery
 #     bias, not tradable. Long-only ⇒ capital preservation (cash) is the edge.
-# Net: ONE coherent engine (breakouts + 20% trailing exit); the regime only
+# Net: ONE coherent engine (breakouts + trailing exit — 20% in this mapping's
+# backtest, 40% live since 2026-09-23, see monitor/position_monitor.py); the regime only
 # decides ACTIVE (bull/euphoria/sideways) vs CASH (bear/crash).
 # Add new strategies only after a --by-regime backtest shows PF>1.3 AND positive
 # expectancy in the target regime.

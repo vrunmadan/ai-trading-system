@@ -49,12 +49,18 @@ log = logging.getLogger(__name__)
 # Config
 # ---------------------------------------------------------------------------
 LONG_STOP_LOSS_PCT = float(os.getenv("LONG_STOP_LOSS_PCT", "7.0"))   # hard disaster stop from entry
-TRAILING_STOP_PCT = float(os.getenv("TRAILING_STOP_PCT", "20.0"))    # trailing stop from peak (backtest-validated)
+TRAILING_STOP_PCT = float(os.getenv("TRAILING_STOP_PCT", "40.0"))    # trailing stop from peak (see exit design below)
 WEAKENING_PCT = float(os.getenv("WEAKENING_ALERT_PCT", "3.0"))       # alert before stop
 
-# Exit design (validated by streak_backtests/backtest.py, 10y, 20% trail beat 7%
-# trail and time exits decisively; a profit target REDUCED expectancy so there is
-# none): exit a long when price breaches the HIGHER of
+# Exit design. streak_backtests/backtest.py (10y) showed a 20% trail beating a
+# 7% trail and time exits, and a profit target REDUCING expectancy (so there is
+# none) — but it never tested anything wider than 20%. The 2026-09-23 exit
+# study (streak_backtests/exit_study.py, 595 mid/small/micro caps, results/
+# exit_study.txt) did: 40% beat 20%, 30% and a 20/40 split in every tier (PF
+# 6.27 vs 2.24, median per-stock 2.03x vs 1.55x) with an unchanged worst
+# decile, because the hard stop below still binds until a trade is up ~55%.
+# Default moved 20 -> 40 on that evidence; paper trading is the confirmation.
+# Exit a long when price breaches the HIGHER of
 #   (a) hard stop  = entry_price * (1 - LONG_STOP_LOSS_PCT/100), and
 #   (b) trail stop = peak_price  * (1 - TRAILING_STOP_PCT/100),
 # where peak_price = max(entry, every logged check price, today's price).
