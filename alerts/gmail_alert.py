@@ -954,6 +954,34 @@ def send_eod_missed_opportunities() -> None:
     )
 
 
+def send_kite_auth_failed_alert(reason: str, count: int) -> bool:
+    """
+    Sent by the pre-cycle Kite preflight the moment the login is found invalid
+    (normally the 09:15 cycle), with a reminder at the 12:15 cycle. The research
+    cycle is skipped while this holds, and open positions get no stop checks.
+    """
+    api_key = os.getenv("KITE_API_KEY", "")
+    login_url = f"https://kite.zerodha.com/connect/login?v=3&api_key={api_key}"
+    reminder = " (REMINDER - still not logged in)" if count > 1 else ""
+    body = (
+        f"\U0001f6a8 KITE LOGIN INVALID - TRADING IS OFF{reminder}\n"
+        f"{'=' * 50}\n\n"
+        "The pre-cycle check could not authenticate with Zerodha, so this cycle\n"
+        "was SKIPPED. No signals can be generated and no open position gets\n"
+        "stop-loss or regime checks until you log in.\n\n"
+        f"Fix it now (1 tap): {login_url}\n\n"
+        "After you log in the next hourly cycle (:15) picks up the new token.\n\n"
+        f"Kite said: {reason}\n\n"
+        "If you already logged in today and still see this, the stored token was\n"
+        "probably wiped by a redeploy (check the Railway persistent volume).\n"
+        f"Status: {RAILWAY_URL}/status?secret={_urlquote(DIAGNOSTIC_SECRET)}\n"
+    )
+    return send_plain_email(
+        subject=f"\U0001f6a8 Kite login invalid - trading is OFF{' (reminder)' if count > 1 else ''}",
+        body=body,
+    )
+
+
 def send_qc_unreachable_alert(signal_id, signal, sizing, qc_verdict, streak: int) -> bool:
     """
     Fired the moment a real, sized candidate is dropped because QC could not
@@ -1093,6 +1121,53 @@ def send_candidate_dropped_alert(signal_id, signal, sizing, status: str) -> bool
     )
 
 
+# A day where at least this share of cycle evaluations ended in ERROR is a
+# failing pipeline, not a quiet market.
+ERROR_SHARE_DEGRADED = 0.25
+_AUTH_MARKERS = ("access_token", "api_key", "tokenexception")
+
+
+def assess_cycle_health(cycle_rows: list, auth_failures: int, auth_reason: str = "") -> tuple:
+    """
+    Decide whether today's cycles actually RAN. Returns (block_or_None, degraded).
+    A quiet market leaves healthy cycle_log rows (PREFILTER_SKIP, PASS, ...);
+    these three failure signatures must never be reported as 'nothing cleared'.
+    """
+    verdicts = [(r.get("verdict") or "") for r in cycle_rows]
+    errors = [r for r in cycle_rows if (r.get("verdict") or "") == "ERROR"]
+    auth_errors = [r for r in errors
+                   if any(m in (r.get("rationale") or "").lower() for m in _AUTH_MARKERS)]
+    total = len(verdicts)
+
+    if auth_failures or auth_errors:
+        detail = auth_reason or (auth_errors[0].get("rationale") or "")[:200]
+        return (
+            "\U0001f6a8 KITE LOGIN INVALID - NO RESEARCH RAN\n"
+            f"{auth_failures} cycle(s) were skipped at the pre-cycle auth check"
+            f"{f' and {len(auth_errors)} ticker fetch(es) were rejected' if auth_errors else ''}.\n"
+            "This is NOT a quiet market and NOT a confidence-threshold result: no\n"
+            "candidate was even evaluated. Open positions also got no stop checks.\n"
+            f"  Kite said: {detail}",
+            True,
+        )
+    if total and len(errors) / total >= ERROR_SHARE_DEGRADED:
+        return (
+            f"\U0001f6a8 PIPELINE ERRORS - {len(errors)} of {total} evaluations failed\n"
+            "Too many errors for this to be a quiet market. First error:\n"
+            f"  {(errors[0].get('rationale') or '')[:200]}",
+            True,
+        )
+    if total == 0:
+        return (
+            "\u26a0 NO CYCLE EVALUATIONS WERE RECORDED TODAY\n"
+            "Nothing was logged, so this summary cannot confirm the research ran.\n"
+            "(Expected only if the regime allows no long strategies - check the\n"
+            "status link below.)",
+            True,
+        )
+    return None, False
+
+
 def send_daily_cycle_summary() -> None:
     """
     Sent at 15:35 IST alongside the EOD sweep.
@@ -1203,6 +1278,23 @@ def send_daily_cycle_summary() -> None:
     if alerted:
         blocks.append(f"Signals alerted today:\n{_lines(alerted)}")
 
+    # Did the research cycles actually run? Checked BEFORE any "quiet day" wording.
+    try:
+        from trader.kite_preflight import get_auth_failures
+        auth_fail_n, auth_fail_reason = get_auth_failures(today_ist)
+    except Exception:
+        auth_fail_n, auth_fail_reason = 0, ""
+    try:
+        health_rows = [r for r in cycle_rows
+                       if str(r.get("cycle_at") or "").startswith(today_ist)]
+    except NameError:
+        health_rows = []
+    health_block, health_degraded = assess_cycle_health(
+        health_rows, auth_fail_n, auth_fail_reason
+    )
+    if health_block:
+        blocks.insert(0, health_block)
+
     if not blocks:
         blocks.append(
             f"No candidate cleared the {MIN_CONFIDENCE:.0f}% confidence threshold today.\n"
@@ -1213,7 +1305,7 @@ def send_daily_cycle_summary() -> None:
 
     # A missing live price is a system fault (usually an expired Kite login),
     # so a price-driven drop marks the day degraded just like a QC outage does.
-    degraded = bool(qc_errored) or any(
+    degraded = bool(qc_errored) or health_degraded or any(
         r["status"] == "DROPPED_NO_PRICE" for r in dropped
     )
     body = (
@@ -1227,6 +1319,9 @@ def send_daily_cycle_summary() -> None:
     )
 
     send_plain_email(
-        subject=f"📊 Daily summary — {len(signals_today)} signal{'s' if len(signals_today) != 1 else ''} today",
+        subject=(
+            ("\U0001f6a8 SYSTEM DEGRADED - " if health_degraded else "\U0001f4ca ")
+            + f"Daily summary \u2014 {len(signals_today)} signal{'s' if len(signals_today) != 1 else ''} today"
+        ),
         body=body,
     )

@@ -356,6 +356,13 @@ def _insert(db, ticker, status, conf=84.0, rationale=None):
 def _summary_body(db, monkeypatch):
     import alerts.gmail_alert as ga
 
+    # Healthy cycle evidence, so these tests exercise the QC outcomes rather
+    # than the "no cycles ran" warning.
+    db.log_cycle_evaluation(
+        cycle_at=db.now_ist(), regime="bull", regime_confidence=70.0,
+        ticker="HEALTHY", exchange="NSE", strategy="52wk_breakout",
+        verdict="PREFILTER_SKIP",
+    )
     spy = MailSpy()
     monkeypatch.setattr(ga, "send_plain_email", spy)
     ga.send_daily_cycle_summary()
@@ -365,6 +372,13 @@ def _summary_body(db, monkeypatch):
 def test_summary_reports_nothing_reached_qc_when_truly_quiet(
     ledger, monkeypatch
 ):
+    # A genuinely quiet day leaves healthy cycle_log rows; with none at all the
+    # summary refuses to call it quiet (see tests/test_kite_auth_guard.py).
+    ledger.log_cycle_evaluation(
+        cycle_at=ledger.now_ist(), regime="bull", regime_confidence=70.0,
+        ticker="TITAN", exchange="NSE", strategy="52wk_breakout",
+        verdict="PREFILTER_SKIP",
+    )
     body = _summary_body(ledger, monkeypatch)
     assert "No candidate cleared" in body
     assert "QC was not the blocker" in body

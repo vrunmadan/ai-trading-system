@@ -1283,6 +1283,11 @@ def _safe_send_kite_login_email():
 
 def _safe_run_cycle():
     try:
+        # Fail loudly at 09:15 if the Kite login is invalid, instead of the
+        # cycle dying silently and the 15:35 summary calling it a quiet day.
+        from trader.kite_preflight import preflight_ok_or_alert
+        if not preflight_ok_or_alert():
+            return
         from main import run_cycle
         run_cycle()
     except Exception as e:
