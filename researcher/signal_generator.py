@@ -926,6 +926,24 @@ def generate_signal(
 
     if not baskets:
         log.info(f"No long strategies for {regime.value} — cycle skipped.")
+        # Leave a trace. Without a cycle_log row, a legitimate regime skip looked
+        # exactly like a dead pipeline in /cycle_history and the daily summary
+        # (2026-10-01: six BEAR skips, empty history). Must never break a cycle.
+        try:
+            from ledger.db import log_cycle_evaluation
+            log_cycle_evaluation(
+                cycle_at=datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
+                regime=regime.value,
+                regime_confidence=regime_reading.confidence,
+                ticker="(all)", exchange="-", strategy="none",
+                verdict="REGIME_SKIP",
+                rationale=(
+                    f"Regime {regime.value.upper()} has no long strategy basket; "
+                    "no ticker was evaluated. Not a fault."
+                ),
+            )
+        except Exception as e:
+            log.warning(f"Could not log REGIME_SKIP row: {e}")
         return None
 
     from trader.kite_client import get_kite_client, drop_incomplete_today_bar

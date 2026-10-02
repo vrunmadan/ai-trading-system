@@ -834,6 +834,7 @@ def cycle_history():
         verdict_color = {
             "TRADE": "#22c55e", "PASS": "#6b7280",
             "NO_TOKEN": "#ef4444", "ERROR": "#ef4444",
+            "REGIME_SKIP": "#6b7280",
         }
 
         def _vcolor(v):

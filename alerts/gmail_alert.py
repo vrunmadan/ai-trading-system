@@ -1127,32 +1127,71 @@ ERROR_SHARE_DEGRADED = 0.25
 _AUTH_MARKERS = ("access_token", "api_key", "tokenexception")
 
 
+def _distinct_cycles(rows: list) -> int:
+    """How many separate cycle runs the rows cover (rows without a timestamp
+    count as one run if there are any rows at all)."""
+    ids = {r.get("cycle_at") for r in rows if r.get("cycle_at")}
+    return len(ids) or (1 if rows else 0)
+
+
+def is_regime_skip_day(rows: list) -> bool:
+    """True when every logged row is a REGIME_SKIP: the cycles ran, the regime
+    simply had no long strategy basket, so no ticker was evaluated."""
+    return bool(rows) and all((r.get("verdict") or "") == "REGIME_SKIP" for r in rows)
+
+
 def assess_cycle_health(cycle_rows: list, auth_failures: int, auth_reason: str = "") -> tuple:
     """
     Decide whether today's cycles actually RAN. Returns (block_or_None, degraded).
     A quiet market leaves healthy cycle_log rows (PREFILTER_SKIP, PASS, ...);
-    these three failure signatures must never be reported as 'nothing cleared'.
+    a regime with no long baskets leaves REGIME_SKIP rows. The failure
+    signatures below must never be reported as 'nothing cleared'.
+
+    Counts matter: a preflight auth failure at 09:15 followed by a login and six
+    healthy cycles is NOT "no research ran" (2026-10-01).
     """
     verdicts = [(r.get("verdict") or "") for r in cycle_rows]
     errors = [r for r in cycle_rows if (r.get("verdict") or "") == "ERROR"]
     auth_errors = [r for r in errors
                    if any(m in (r.get("rationale") or "").lower() for m in _AUTH_MARKERS)]
     total = len(verdicts)
+    ran = _distinct_cycles(cycle_rows)
 
-    if auth_failures or auth_errors:
+    if auth_errors:
         detail = auth_reason or (auth_errors[0].get("rationale") or "")[:200]
         return (
-            "\U0001f6a8 KITE LOGIN INVALID - NO RESEARCH RAN\n"
-            f"{auth_failures} cycle(s) were skipped at the pre-cycle auth check"
-            f"{f' and {len(auth_errors)} ticker fetch(es) were rejected' if auth_errors else ''}.\n"
-            "This is NOT a quiet market and NOT a confidence-threshold result: no\n"
-            "candidate was even evaluated. Open positions also got no stop checks.\n"
+            "\U0001f6a8 KITE LOGIN INVALID - RESEARCH WAS IMPAIRED\n"
+            f"{auth_failures} cycle(s) were skipped at the pre-cycle auth check and "
+            f"{len(auth_errors)} ticker fetch(es) were rejected.\n"
+            "This is NOT a quiet market and NOT a confidence-threshold result.\n"
+            "The 15:35 position monitor needs the same login - see its email.\n"
             f"  Kite said: {detail}",
             True,
         )
+
+    recovered_note = ""
+    if auth_failures:
+        detail = auth_reason
+        if ran == 0:
+            return (
+                "\U0001f6a8 KITE LOGIN INVALID - NO RESEARCH RAN\n"
+                f"{auth_failures} cycle(s) were skipped at the pre-cycle auth check and "
+                "no other cycle ran.\n"
+                "This is NOT a quiet market and NOT a confidence-threshold result: no\n"
+                "candidate was even evaluated.\n"
+                "The 15:35 position monitor needs the same login - see its email.\n"
+                f"  Kite said: {detail}",
+                True,
+            )
+        recovered_note = (
+            f"\u26a0 Kite login was invalid for {auth_failures} cycle(s) (skipped at the "
+            f"pre-cycle auth check). {ran} cycle(s) ran after the login was restored.\n"
+        )
+
     if total and len(errors) / total >= ERROR_SHARE_DEGRADED:
         return (
-            f"\U0001f6a8 PIPELINE ERRORS - {len(errors)} of {total} evaluations failed\n"
+            recovered_note
+            + f"\U0001f6a8 PIPELINE ERRORS - {len(errors)} of {total} evaluations failed\n"
             "Too many errors for this to be a quiet market. First error:\n"
             f"  {(errors[0].get('rationale') or '')[:200]}",
             True,
@@ -1161,10 +1200,25 @@ def assess_cycle_health(cycle_rows: list, auth_failures: int, auth_reason: str =
         return (
             "\u26a0 NO CYCLE EVALUATIONS WERE RECORDED TODAY\n"
             "Nothing was logged, so this summary cannot confirm the research ran.\n"
-            "(Expected only if the regime allows no long strategies - check the\n"
-            "status link below.)",
+            "Cycles that skip for a regime with no long baskets are logged as\n"
+            "REGIME_SKIP, so an empty log means no cycle completed - check the\n"
+            "status link below.",
             True,
         )
+    if is_regime_skip_day(cycle_rows):
+        latest = max(cycle_rows, key=lambda r: r.get("cycle_at") or "")
+        regime = (latest.get("regime") or "?").upper()
+        conf = latest.get("regime_confidence")
+        conf_txt = f" ({conf:.0f}% confidence)" if isinstance(conf, (int, float)) else ""
+        return (
+            recovered_note
+            + f"Regime was {regime}{conf_txt} for {ran} cycle(s). The system has no long\n"
+            "strategy for that regime, so no ticker was evaluated. This is the\n"
+            "strategy working as designed, not a fault.",
+            False,
+        )
+    if recovered_note:
+        return recovered_note.rstrip("\n"), False
     return None, False
 
 
@@ -1295,7 +1349,11 @@ def send_daily_cycle_summary() -> None:
     if health_block:
         blocks.insert(0, health_block)
 
-    if not blocks:
+    # "No candidate cleared" is only true when tickers were actually evaluated.
+    # Skip it on a degraded day and on a regime-skip day - those have their own
+    # explanation in the health block.
+    if (not (qc_errored or qc_blocked or dropped or alerted)
+            and not health_degraded and not is_regime_skip_day(health_rows)):
         blocks.append(
             f"No candidate cleared the {MIN_CONFIDENCE:.0f}% confidence threshold today.\n"
             "  (QC was not the blocker \u2014 nothing reached it.)"

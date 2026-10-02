@@ -134,3 +134,72 @@ def test_summary_email_says_login_invalid_not_quiet(ledger, monkeypatch):
     assert "SYSTEM DEGRADED" in subject
     assert "KITE LOGIN INVALID" in body
     assert "[SYSTEM DEGRADED]" in body
+
+
+# ---- 2026-10-01: preflight skip followed by a restored login --------------
+def _crow(verdict, cycle_at, regime="bear", conf=83.0, rationale=""):
+    return {"verdict": verdict, "cycle_at": cycle_at, "regime": regime,
+            "regime_confidence": conf, "rationale": rationale}
+
+
+def test_preflight_skip_then_healthy_cycles_is_not_no_research_ran():
+    rows = [_crow("PREFILTER_SKIP", f"2026-10-01 {h}:15:00", "bull", 80.0)
+            for h in (10, 11, 12)]
+    block, degraded = assess_cycle_health(rows, 1, "Incorrect `access_token`.")
+    assert not degraded
+    assert "NO RESEARCH RAN" not in block
+    assert "1 cycle(s)" in block and "3 cycle(s) ran" in block
+
+
+def test_preflight_skip_then_regime_skips_explains_both_and_is_not_degraded():
+    rows = [_crow("REGIME_SKIP", f"2026-10-01 {h}:15:00") for h in (10, 11, 12, 13, 14, 15)]
+    block, degraded = assess_cycle_health(rows, 1, "x")
+    assert not degraded
+    assert "NO RESEARCH RAN" not in block
+    assert "BEAR" in block and "not a fault" in block and "6 cycle(s)" in block
+
+
+def test_regime_skip_day_without_auth_failure_is_informational():
+    rows = [_crow("REGIME_SKIP", f"2026-10-01 {h}:15:00") for h in (9, 10)]
+    block, degraded = assess_cycle_health(rows, 0)
+    assert not degraded and "BEAR" in block and "not a fault" in block
+
+
+def test_auth_failures_and_zero_cycles_still_flags_no_research_ran():
+    block, degraded = assess_cycle_health([], 2, "bad token")
+    assert degraded and "NO RESEARCH RAN" in block
+    assert "no stop checks" not in block.lower()
+
+
+def test_is_regime_skip_day():
+    from alerts.gmail_alert import is_regime_skip_day
+    assert not is_regime_skip_day([])
+    assert is_regime_skip_day([_crow("REGIME_SKIP", "t")])
+    assert not is_regime_skip_day([_crow("REGIME_SKIP", "t"), _crow("PASS", "t")])
+
+
+# ---- REGIME_SKIP row is written, and never breaks a cycle ------------------
+def _reading(regime_value="bear"):
+    from types import SimpleNamespace
+    from researcher.regime_classifier import Regime
+    return SimpleNamespace(regime=Regime(regime_value), confidence=83.0)
+
+
+def test_generate_signal_logs_regime_skip_row(ledger):
+    from researcher import signal_generator as sg
+    assert sg.generate_signal(_reading("bear")) is None
+    rows = ledger.get_cycle_log(days=1)
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["verdict"] == "REGIME_SKIP" and r["regime"] == "bear"
+    assert r["regime_confidence"] == 83.0 and r["ticker"] == "(all)"
+
+
+def test_regime_skip_log_failure_does_not_break_cycle(monkeypatch):
+    from researcher import signal_generator as sg
+    import ledger.db as db
+
+    def boom(**kw):
+        raise RuntimeError("db down")
+    monkeypatch.setattr(db, "log_cycle_evaluation", boom)
+    assert sg.generate_signal(_reading("bear")) is None
