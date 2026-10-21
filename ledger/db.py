@@ -1134,3 +1134,49 @@ def get_update_portfolio_peak(current_value: float, mode: str) -> float:
             )
             return current_value
         return peak
+
+
+def reset_portfolio_peak(current_value: float, mode: str) -> None:
+    """
+    Force ONE book's drawdown peak to current_value, even if that is lower
+    than the stored peak. Used only by the drawdown kill switch when the
+    regime returns from cash to active (see main._regime_return_peak_reset).
+    """
+    if mode not in ("PAPER", "LIVE"):
+        raise ValueError(f"mode must be 'PAPER' or 'LIVE', got {mode!r}")
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO portfolio_peak (mode, peak_value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(mode) DO UPDATE SET peak_value=excluded.peak_value,
+                                            updated_at=excluded.updated_at
+            """,
+            (mode, current_value, now_ist()),
+        )
+
+
+def get_last_regime(mode: str) -> str | None:
+    """Last regime value (e.g. 'bear') the hourly cycle recorded for this book."""
+    if mode not in ("PAPER", "LIVE"):
+        raise ValueError(f"mode must be 'PAPER' or 'LIVE', got {mode!r}")
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT last_regime FROM regime_state WHERE mode = ?", (mode,)
+        ).fetchone()
+        return row["last_regime"] if row else None
+
+
+def set_last_regime(mode: str, regime: str) -> None:
+    if mode not in ("PAPER", "LIVE"):
+        raise ValueError(f"mode must be 'PAPER' or 'LIVE', got {mode!r}")
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO regime_state (mode, last_regime, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(mode) DO UPDATE SET last_regime=excluded.last_regime,
+                                            updated_at=excluded.updated_at
+            """,
+            (mode, regime, now_ist()),
+        )

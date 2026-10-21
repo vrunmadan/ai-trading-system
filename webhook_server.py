@@ -742,7 +742,7 @@ def diagnose_cycle():
   &nbsp;<strong>{regime_reading.confidence:.0f}%</strong> confidence
   <p style='margin:8px 0 0;font-size:13px;color:#374151'>{regime_reading.rationale}</p>
   <p style='margin:4px 0 0;font-size:12px;color:#64748b'>
-    Nifty vs 200-EMA: <strong>{regime_reading.nifty_vs_ema_pct:+.1f}%</strong> &nbsp;|&nbsp;
+    {getattr(regime_reading, 'regime_index', 'NIFTY 50')} vs 200-EMA: <strong>{regime_reading.nifty_vs_ema_pct:+.1f}%</strong> &nbsp;|&nbsp;
     VIX: <strong>{regime_reading.vix:.1f}</strong> &nbsp;|&nbsp;
     Breadth: <strong>{regime_reading.breadth_pct:.0f}%</strong>
   </p>

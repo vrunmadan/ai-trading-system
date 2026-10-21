@@ -118,6 +118,37 @@ def _drop_candidate_before_qc(signal, sizing, status: str, price_at_signal: floa
 # Research cycle (called hourly by scheduler and optionally by run_server.py)
 # ---------------------------------------------------------------------------
 
+_CASH_REGIMES = ("bear", "extreme_fear_crash")
+
+
+def _regime_return_peak_reset(mode: str, regime_reading, portfolio_value: float) -> bool:
+    """
+    Drawdown kill switch reset rule (2026-10-21): when the regime goes from a
+    cash regime (bear / extreme_fear_crash) to an active one, reset the
+    drawdown peak to the current portfolio value, so each active phase is
+    judged from where it started rather than from a high set years ago.
+    Records the regime every call. Returns True if the peak was reset.
+
+    A degraded zero-confidence read (data outage) is not recorded and never
+    resets anything — it isn't a real market observation.
+    """
+    from ledger.db import get_last_regime, set_last_regime, reset_portfolio_peak
+
+    regime = getattr(getattr(regime_reading, "regime", None), "value", None)
+    if not regime or getattr(regime_reading, "confidence", 0.0) <= 0.0:
+        return False
+    previous = get_last_regime(mode)
+    set_last_regime(mode, regime)
+    if previous in _CASH_REGIMES and regime not in _CASH_REGIMES:
+        reset_portfolio_peak(portfolio_value, mode)
+        log.warning(
+            f"Regime returned {previous} → {regime}: drawdown peak for {mode} "
+            f"reset to ₹{portfolio_value:,.0f}"
+        )
+        return True
+    return False
+
+
 def run_cycle() -> None:
     """
     One research cycle: classify regime → find signal → size → QC → alert.
@@ -166,9 +197,25 @@ def run_cycle() -> None:
         # research. (User directive 2026-08-26: never suppress a signal on a
         # trade limit.) The hard-halt email is sent inside check_portfolio_risk.
         risk_flags: list[str] = list(getattr(portfolio_status, "advisory_flags", []) or [])
+        regime_reading = None
         if not portfolio_status.approved:
-            log.warning(f"Cycle halted by HARD circuit breaker: {portfolio_status.halt_reason}")
-            return
+            # Drawdown kill switch: a halted book can only un-halt when the
+            # regime returns from cash to active (peak reset), so the regime
+            # must still be read while halted — otherwise the halt is
+            # permanent. Classification is deterministic math, no LLM cost.
+            if getattr(portfolio_status, "halt_kind", "") == "DRAWDOWN":
+                try:
+                    regime_reading = classify_regime()
+                    if _regime_return_peak_reset(cycle_mode, regime_reading, portfolio_status.portfolio_value):
+                        portfolio_status = check_portfolio_risk(
+                            open_positions_for_risk, weekly_pnl_early, mode=cycle_mode
+                        )
+                        risk_flags = list(getattr(portfolio_status, "advisory_flags", []) or [])
+                except Exception as e:
+                    log.error(f"Regime check while drawdown-halted failed: {e}", exc_info=True)
+            if not portfolio_status.approved:
+                log.warning(f"Cycle halted by HARD circuit breaker: {portfolio_status.halt_reason}")
+                return
     except Exception as e:
         log.error(f"Portfolio risk check failed: {e}", exc_info=True)
         # Fail safe — if we can't check risk, don't trade
@@ -177,11 +224,16 @@ def run_cycle() -> None:
     # ----------------------------------------------------------------
     # Step 1: Regime classification
     # ----------------------------------------------------------------
-    try:
-        regime_reading = classify_regime()
-    except Exception as e:
-        log.error(f"Regime classification failed: {e}", exc_info=True)
-        return
+    if regime_reading is None:
+        try:
+            regime_reading = classify_regime()
+        except Exception as e:
+            log.error(f"Regime classification failed: {e}", exc_info=True)
+            return
+        try:
+            _regime_return_peak_reset(cycle_mode, regime_reading, portfolio_status.portfolio_value)
+        except Exception as e:
+            log.error(f"Drawdown peak reset check failed (non-fatal): {e}", exc_info=True)
 
     # Regime confidence is ADVISORY, not a gate (user directive 2026-08-26:
     # never suppress a signal). A mixed/low-confidence read no longer skips the

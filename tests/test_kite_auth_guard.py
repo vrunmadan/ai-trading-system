@@ -1,6 +1,7 @@
 """Kite auth failures must be loud at 09:15, and never reported as a quiet day."""
 import os
 import sqlite3
+from contextlib import closing
 import tempfile
 
 import pytest
@@ -14,11 +15,17 @@ def ledger(monkeypatch):
     os.close(fd)
     import ledger.db as db
     monkeypatch.setattr(db, "DB_PATH", path)
-    with sqlite3.connect(path) as conn:
+    # closing(): sqlite3's own context manager commits but does NOT close, and an
+    # open handle blocks os.unlink on Windows (WinError 32) at teardown.
+    with closing(sqlite3.connect(path)) as conn:
         with open(os.path.join(os.path.dirname(db.__file__), "schema.sql")) as f:
             conn.executescript(f.read())
     yield db
-    os.unlink(path)
+    for suffix in ("", "-wal", "-shm"):
+        try:
+            os.unlink(path + suffix)
+        except OSError:
+            pass
 
 
 def _row(verdict, rationale=""):

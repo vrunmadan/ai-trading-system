@@ -1,0 +1,39 @@
+MTM drawdown episodes (live config, Smallcap regime), deeper than 5%:
+     -6.5%  starting 2016-07-08  lasting 32 sessions
+     -6.2%  starting 2016-09-07  lasting 12 sessions
+    -20.4%  starting 2016-10-19  lasting 135 sessions
+     -9.7%  starting 2017-05-11  lasting 89 sessions
+     -6.5%  starting 2017-09-20  lasting 54 sessions
+    -10.9%  starting 2018-01-05  lasting 65 sessions
+    -23.7%  starting 2018-04-27  lasting 567 sessions
+     -6.3%  starting 2020-08-28  lasting 10 sessions
+     -9.4%  starting 2020-09-16  lasting 45 sessions
+     -5.9%  starting 2020-12-11  lasting 15 sessions
+     -6.7%  starting 2021-04-12  lasting 7 sessions
+    -36.7%  starting 2021-08-02  lasting 445 sessions
+     -7.9%  starting 2023-09-08  lasting 15 sessions
+     -9.6%  starting 2023-10-13  lasting 23 sessions
+     -6.9%  starting 2023-12-05  lasting 40 sessions
+    -20.7%  starting 2024-02-09  lasting 120 sessions
+    -15.1%  starting 2024-09-19  lasting 56 sessions
+    -36.9%  starting 2024-12-12  lasting 459 sessions
+  episodes worse than -8%: 10  (~1 every 1.0 yrs)
+  episodes worse than -10%: 7  (~1 every 1.5 yrs)
+  episodes worse than -15%: 6  (~1 every 1.7 yrs)
+  episodes worse than -20%: 5  (~1 every 2.1 yrs)
+  episodes worse than -25%: 2  (~1 every 5.2 yrs)
+  episodes worse than -30%: 2  (~1 every 5.2 yrs)
+
+Halt variants (MTM drawdown from peak; peak resets when regime turns cash->active):
+  halt None%: CAGR  19.2%  MaxDD  -36.9%  trades  79  days halted 0
+  halt    8%: CAGR  19.2%  MaxDD  -35.5%  trades  77  days halted 509
+  halt   12%: CAGR  19.6%  MaxDD  -36.7%  trades  79  days halted 267
+  halt   15%: CAGR  19.6%  MaxDD  -36.7%  trades  79  days halted 187
+  halt   20%: CAGR  19.2%  MaxDD  -36.9%  trades  79  days halted 70
+  halt   25%: CAGR  19.2%  MaxDD  -36.9%  trades  79  days halted 0
+  halt   30%: CAGR  19.2%  MaxDD  -36.9%  trades  79  days halted 0
+
+Current design (REALISED-only, never resets):
+  halt 8%: CAGR   2.2%  MaxDD  -18.7%  trades 28  days halted 2105 of 2539
+  halt 15%: CAGR  19.0%  MaxDD  -36.9%  trades 77  days halted 99 of 2539
+  halt 20%: CAGR  19.2%  MaxDD  -36.9%  trades 79  days halted 0 of 2539

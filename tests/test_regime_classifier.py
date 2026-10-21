@@ -334,3 +334,88 @@ class TestFetchersCallDropIncompleteTodayBar:
 
         assert len(calls) == 1  # one sampled ticker -> one historical_data call
         assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# 2026-10-21: regime index switched from Nifty 50 to Nifty Smallcap 250
+# (bands scaled 1.5x). See REGIME_INDEX_SYMBOL in regime_classifier.py.
+# ---------------------------------------------------------------------------
+
+SMALLCAP_TOKEN = 999250
+
+
+class _IndexKite:
+    """Smallcap 250 resolvable; returns a rising series for it, flat for others."""
+
+    def __init__(self, include_index=True):
+        self.include_index = include_index
+        self.history_tokens = []
+
+    def instruments(self, exchange):
+        rows = [{"tradingsymbol": "DUMMY", "instrument_token": 1, "instrument_type": "EQ", "segment": "NSE"}]
+        if self.include_index:
+            rows.append({"tradingsymbol": "NIFTY SMLCAP 250", "instrument_token": SMALLCAP_TOKEN,
+                         "instrument_type": "EQ", "segment": "INDICES"})
+        return rows
+
+    def historical_data(self, token, from_date, to_date, interval, **kwargs):
+        self.history_tokens.append(token)
+        if token == SMALLCAP_TOKEN:
+            return [{"close": 100.0}] * 59 + [{"close": 100.0}, {"close": 100.0}]
+        return [{"close": 15.0 if token == rc.INDIA_VIX_TOKEN else 100.0}] * 60
+
+    def ltp(self, keys):
+        ks = [keys] if isinstance(keys, str) else keys
+        return {k: {"last_price": 100.0} for k in ks}
+
+
+class TestRegimeIndexSwitch:
+    def test_default_index_is_smallcap_250_scaled(self):
+        assert rc.REGIME_INDEX_SYMBOL == "NIFTY SMLCAP 250"
+        assert rc.REGIME_INDEX_BAND_SCALE == 1.5
+
+    def test_resolves_index_token_from_instruments(self):
+        rows = _IndexKite().instruments("NSE")
+        assert rc._resolve_index_token(rows, "NIFTY SMLCAP 250") == SMALLCAP_TOKEN
+        assert rc._resolve_index_token(rows, "NIFTY 50") == rc.NIFTY50_TOKEN
+        assert rc._resolve_index_token(rows, "NIFTY MIDCAP 150") is None
+
+    def test_token_override_env(self, monkeypatch):
+        monkeypatch.setenv("REGIME_INDEX_TOKEN", "12345")
+        assert rc._resolve_index_token([], "NIFTY SMLCAP 250") == 12345
+
+    def test_band_scale_widens_bear_band(self):
+        # -4% raw: bear territory on Nifty bands, only "mildly bearish" at 1.5x
+        s1, p1 = _score_components(-4.0, 14.0, 0.0, 50.0)
+        s2, p2 = _score_components(-4.0, 14.0, 0.0, 50.0, index_label="NIFTY SMLCAP 250", band_scale=1.5)
+        assert s2 - s1 == pytest.approx(2.0)          # -3.0 -> -1.0 on the index component
+        assert "NIFTY SMLCAP 250 -4.0% vs 200-EMA (mildly bearish)" in p2[0]  # raw value shown
+
+    def test_classify_uses_smallcap_index(self, monkeypatch):
+        kite = _IndexKite()
+        monkeypatch.setattr("trader.kite_client.get_kite_client", lambda: kite)
+        monkeypatch.setattr("universe.loader.get_tickers", lambda: ["DUMMY"])
+        reading = classify_regime(apply_inertia=False)
+        assert SMALLCAP_TOKEN in kite.history_tokens
+        assert rc.NIFTY50_TOKEN not in kite.history_tokens
+        assert reading.regime_index == "NIFTY SMLCAP 250"
+        assert "NIFTY SMLCAP 250" in reading.rationale
+
+    def test_unresolvable_index_falls_back_to_nifty_loudly(self, monkeypatch):
+        kite = _IndexKite(include_index=False)
+        monkeypatch.setattr("trader.kite_client.get_kite_client", lambda: kite)
+        monkeypatch.setattr("universe.loader.get_tickers", lambda: ["DUMMY"])
+        reading = classify_regime(apply_inertia=False)
+        assert rc.NIFTY50_TOKEN in kite.history_tokens
+        assert reading.regime_index == "NIFTY 50"
+        assert "NIFTY 50 fallback" in reading.rationale
+
+    def test_rollback_to_nifty_via_settings(self, monkeypatch):
+        monkeypatch.setattr(rc, "REGIME_INDEX_SYMBOL", "NIFTY 50")
+        monkeypatch.setattr(rc, "REGIME_INDEX_BAND_SCALE", 1.0)
+        kite = _IndexKite()
+        monkeypatch.setattr("trader.kite_client.get_kite_client", lambda: kite)
+        monkeypatch.setattr("universe.loader.get_tickers", lambda: ["DUMMY"])
+        reading = classify_regime(apply_inertia=False)
+        assert reading.regime_index == "NIFTY 50"
+        assert "fallback" not in reading.rationale

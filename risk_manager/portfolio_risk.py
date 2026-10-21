@@ -6,8 +6,21 @@ If any circuit breaker trips, the entire cycle halts immediately.
 No new signals are generated. A Gmail alert is sent.
 
 Circuit breakers (all configurable via .env):
-  MAX_DRAWDOWN_PCT       - halt if portfolio drops X% below its all-time peak
-                           default: 8.0%  (₹10L → halt if value drops below ₹9.2L)
+  MAX_DRAWDOWN_PCT       - KILL SWITCH: halt new entries if portfolio value
+                           (realised + mark-to-market) drops X% below its peak.
+                           default: 25.0% (2026-10-21; was 8.0%).
+                           The peak resets each time the regime returns from a
+                           cash regime (bear/crash) to an active one — see
+                           main._regime_return_peak_reset. Why 25%: in the 10y
+                           backtest (streak_backtests/results/drawdown_study.txt)
+                           drops worse than -20% came ~every 2 years and were
+                           normal operation; with this reset rule -25% never
+                           fired, so if it fires live, something is outside
+                           history — stop and review. It blocks NEW entries only;
+                           it does not sell open positions (their 7% hard stop /
+                           40% trail still run in monitor/position_monitor.py).
+                           The old 8% realised-only breaker would have frozen
+                           the system ~83% of the backtest.
   MAX_DEPLOYED_PCT       - halt if X% of capital is already deployed in open positions
                            default: 65.0% (no new trades if ₹6.5L+ is out)
   WEEKLY_LOSS_LIMIT_INR  - halt the week if realised P&L is below -X
@@ -39,7 +52,8 @@ down 20% had lost ₹1.2L that this gate could not see).
 This still does not account for fees, dividends, corporate actions or
 external cash flows — those need a fuller ledger and are out of scope here.
 
-Drawdown peak is stored in SQLite and updated whenever portfolio value increases.
+Drawdown peak is stored in SQLite, updated whenever portfolio value increases,
+and reset to the current value when the regime returns from cash to active.
 """
 
 import logging
@@ -52,7 +66,7 @@ log = logging.getLogger(__name__)
 # Thresholds — all overridable via .env
 # ---------------------------------------------------------------------------
 CAPITAL = float(os.getenv("TOTAL_CAPITAL_INR", "1000000"))
-MAX_DRAWDOWN_PCT    = float(os.getenv("MAX_DRAWDOWN_PCT",      "8.0"))
+MAX_DRAWDOWN_PCT    = float(os.getenv("MAX_DRAWDOWN_PCT",      "25.0"))
 MAX_DEPLOYED_PCT    = float(os.getenv("MAX_DEPLOYED_PCT",      "65.0"))
 WEEKLY_LOSS_LIMIT   = float(os.getenv("WEEKLY_LOSS_LIMIT_INR", "-15000"))
 MAX_OPEN_POSITIONS  = int(os.getenv("MAX_OPEN_POSITIONS",      "6"))
@@ -81,6 +95,8 @@ class PortfolioRiskStatus:
     # (User directive 2026-08-26: never suppress a signal on a trade limit; the
     # decision to trade is the user's.)
     advisory_flags: list[str] = field(default_factory=list)
+    # Which hard breaker tripped: "DRAWDOWN", "WEEKLY_LOSS" or "" (approved).
+    halt_kind: str = ""
 
 
 def check_portfolio_risk(
@@ -148,15 +164,21 @@ def check_portfolio_risk(
     # collected in full (not first-match) so the user sees every flag.
     # ----------------------------------------------------------------
     halt_reason = ""
+    halt_kind = ""
     advisory_flags: list[str] = []
 
     if drawdown_pct <= -MAX_DRAWDOWN_PCT:
+        halt_kind = "DRAWDOWN"
         halt_reason = (
-            f"DRAWDOWN CIRCUIT BREAKER: portfolio is {drawdown_pct:.1f}% below peak "
+            f"DRAWDOWN KILL SWITCH: portfolio is {drawdown_pct:.1f}% below peak "
             f"(₹{portfolio_value:,.0f} vs peak ₹{peak_value:,.0f}). "
-            f"Limit: -{MAX_DRAWDOWN_PCT}%. No new trades until portfolio recovers."
+            f"Limit: -{MAX_DRAWDOWN_PCT}%. No new entries until the portfolio "
+            f"recovers above the limit or the regime returns from bear/crash to "
+            f"an active regime (peak then resets). Open positions keep their stops. "
+            f"This is outside 10y backtest history — review the system."
         )
     elif weekly_pnl <= WEEKLY_LOSS_LIMIT:
+        halt_kind = "WEEKLY_LOSS"
         halt_reason = (
             f"WEEKLY LOSS CIRCUIT BREAKER: week P&L is ₹{weekly_pnl:,.0f} "
             f"(limit: ₹{WEEKLY_LOSS_LIMIT:,.0f}). Halting for the rest of the week."
@@ -194,6 +216,7 @@ def check_portfolio_risk(
         open_position_count=open_count,
         sector_breaches=sector_breaches,
         advisory_flags=advisory_flags,
+        halt_kind=halt_kind,
     )
 
     if approved:

@@ -141,3 +141,13 @@ CREATE TABLE IF NOT EXISTS portfolio_peak (
     peak_value REAL NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+-- Last regime the hourly cycle saw, per book. Used by the drawdown kill
+-- switch (2026-10-21): the peak resets when the regime returns from a cash
+-- regime (bear / extreme_fear_crash) to an active one, so each active phase
+-- is measured from its own starting point.
+CREATE TABLE IF NOT EXISTS regime_state (
+    mode TEXT PRIMARY KEY CHECK (mode IN ('PAPER', 'LIVE')),
+    last_regime TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);

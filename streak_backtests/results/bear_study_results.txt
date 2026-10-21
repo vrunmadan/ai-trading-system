@@ -1,0 +1,60 @@
+BEAR-REGIME STUDY — 2026-10-21. Universe: universe/universe.csv (621 of 645 with >=260 bars). Yahoo daily, 2016-07 .. 2026-10-21.
+Live rules replicated: composite regime score (copied from researcher/regime_classifier.py), live baskets, EOD close-based 7% hard stop / 40% trail, paper-mode regime invalidation, 5 slots x 20%, 100 bps round trip.
+CAVEAT: today's index members only (survivorship bias) -> absolute returns are inflated; read comparisons and controls only.
+
+=== TEST 1: which index should drive the regime ===
+NIFTY50              {'CAGR': np.float64(18.7), 'MaxDD': np.float64(-40.9), 'MAR': np.float64(0.46), 'trades': 63, 'win': 34.9, 'exp': np.float64(18.97), 'PF': np.float64(4.52), 'final': np.float64(58.4)} | regime days%: {'bull': 50.0, 'sideways': 20.0, 'euphoria': 15.0, 'bear': 11.0, 'extreme_fear_crash': 3.0}
+MIDCAP50             {'CAGR': np.float64(18.6), 'MaxDD': np.float64(-45.6), 'MAR': np.float64(0.41), 'trades': 100, 'win': 34.0, 'exp': np.float64(11.98), 'PF': np.float64(3.16), 'final': np.float64(58.0)} | regime days%: {'bull': 38.0, 'euphoria': 28.0, 'sideways': 19.0, 'bear': 12.0, 'extreme_fear_crash': 4.0}
+SMALLCAP250          {'CAGR': np.float64(18.0), 'MaxDD': np.float64(-40.8), 'MAR': np.float64(0.44), 'trades': 110, 'win': 29.1, 'exp': np.float64(11.57), 'PF': np.float64(2.93), 'final': np.float64(54.9)} | regime days%: {'bull': 29.0, 'euphoria': 28.0, 'sideways': 22.0, 'bear': 13.0, 'extreme_fear_crash': 7.0}
+BLEND_MID_SMALL      {'CAGR': np.float64(22.2), 'MaxDD': np.float64(-44.5), 'MAR': np.float64(0.5), 'trades': 98, 'win': 30.6, 'exp': np.float64(15.81), 'PF': np.float64(3.68), 'final': np.float64(78.9)} | regime days%: {'bull': 34.0, 'euphoria': 28.0, 'sideways': 21.0, 'bear': 13.0, 'extreme_fear_crash': 5.0}
+SMALLCAP250_SCALED   {'CAGR': np.float64(19.2), 'MaxDD': np.float64(-36.9), 'MAR': np.float64(0.52), 'trades': 79, 'win': 32.9, 'exp': np.float64(15.97), 'PF': np.float64(3.68), 'final': np.float64(60.9)} | regime days%: {'bull': 36.0, 'sideways': 26.0, 'euphoria': 20.0, 'bear': 15.0, 'extreme_fear_crash': 4.0}
+NO_GATE (always on)  {'CAGR': np.float64(8.8), 'MaxDD': np.float64(-32.8), 'MAR': np.float64(0.27), 'trades': 48, 'win': 25.0, 'exp': np.float64(11.55), 'PF': np.float64(2.71), 'final': np.float64(23.9)}
+NIFTY50 + 6.5% cash  {'CAGR': np.float64(18.4), 'MaxDD': np.float64(-39.7), 'MAR': np.float64(0.46), 'trades': 66, 'win': 31.8, 'exp': np.float64(17.32), 'PF': np.float64(4.1), 'final': np.float64(57.1)}
+NIFTY50 today: bear pct_vs_200ema=-4.9 vix=15.7 breadth=12
+MIDCAP50 today: bear pct_vs_200ema=-4.6 vix=15.7 breadth=12
+SMALLCAP250 today: bear pct_vs_200ema=-1.8 vix=15.7 breadth=12
+BLEND_MID_SMALL today: bear pct_vs_200ema=-3.2 vix=15.7 breadth=12
+SMALLCAP250_SCALED today: bear pct_vs_200ema=-1.2 vix=15.7 breadth=12
+Signal-level (union of live basket strategies, each strategy only where the live basket uses it):
+  NIFTY50              ACTIVE n=9723 win=  23% exp=  36.9% PF=6.05 | BLOCKED n=3804 win=  28% exp=  71.3% PF=11.56
+  MIDCAP50             ACTIVE n=9777 win=  23% exp=  36.7% PF=6.04 | BLOCKED n=3750 win=  27% exp=  72.3% PF=11.58
+  SMALLCAP250          ACTIVE n=9138 win=  23% exp=  38.4% PF=6.30 | BLOCKED n=4389 win=  26% exp=  63.7% PF=10.13
+  BLEND_MID_SMALL      ACTIVE n=9475 win=  23% exp=  37.9% PF=6.23 | BLOCKED n=4052 win=  26% exp=  66.8% PF=10.63
+  SMALLCAP250_SCALED   ACTIVE n=9248 win=  23% exp=  38.3% PF=6.28 | BLOCKED n=4279 win=  26% exp=  64.5% PF=10.27
+
+Portfolio grid CAGR/MaxDD (slots x trail):
+  NIFTY50              5s/20t  17.4/ -42.2 | 5s/40t  18.7/ -40.9 | 10s/20t  27.8/ -44.3 | 10s/40t  27.2/ -35.4
+  MIDCAP50             5s/20t  25.3/ -39.7 | 5s/40t  18.6/ -45.6 | 10s/20t  22.9/ -34.1 | 10s/40t  22.5/ -32.4
+  SMALLCAP250          5s/20t  20.9/ -37.9 | 5s/40t  18.0/ -40.8 | 10s/20t  18.2/ -42.6 | 10s/40t  20.1/ -36.8
+  BLEND_MID_SMALL      5s/20t  26.1/ -35.8 | 5s/40t  22.2/ -44.5 | 10s/20t  20.0/ -36.9 | 10s/40t  22.7/ -36.7
+  SMALLCAP250_SCALED   5s/20t  26.6/ -27.2 | 5s/40t  19.2/ -36.9 | 10s/20t  21.6/ -38.7 | 10s/40t  24.3/ -35.2
+
+Regime days since 2026-09-24 by index:
+  NIFTY50 {'bear': 18}
+  MIDCAP50 {'sideways': 13, 'bear': 5}
+  SMALLCAP250 {'bull': 6, 'sideways': 11, 'bear': 1}
+  BLEND_MID_SMALL {'bull': 2, 'sideways': 13, 'bear': 3}
+  SMALLCAP250_SCALED {'bull': 4, 'sideways': 13, 'bear': 1}
+
+=== TEST 2: relative-strength breakout in BEAR vs controls ===
+bear days in test window: 283 episodes by year: {'2016': 31, '2018': 37, '2019': 45, '2020': 13, '2021': 1, '2022': 58, '2023': 11, '2024': 4, '2025': 37, '2026': 46}
+
+LIVE EXIT 7% stop / 40% trail
+  CONTROL any stock    n=5108 win= 22% exp=  39.0% med=  -8.6% PF= 6.25 hold=  22d years={'2016': 727, '2018': 428, '2019': 677, '2020': 379, '2022': 973, '2023': 144, '2025': 951, '2026': 829}
+  CONTROL plain 52wk   n= 270 win= 25% exp=  18.6% med=  -8.6% PF= 3.57 hold=  22d years={'2016': 32, '2018': 2, '2019': 23, '2020': 5, '2021': 6, '2022': 54, '2023': 14, '2024': 19, '2025': 18, '2026': 97}
+  RS>=10pp             n= 264 win= 24% exp=  18.2% med=  -8.6% PF= 3.49 hold=  21d years={'2016': 31, '2018': 1, '2019': 20, '2020': 6, '2021': 6, '2022': 53, '2023': 14, '2024': 18, '2025': 18, '2026': 97}
+  RS>=20pp             n= 217 win= 23% exp=  15.1% med=  -8.6% PF= 3.04 hold=  17d years={'2016': 24, '2018': 1, '2019': 13, '2020': 6, '2021': 6, '2022': 47, '2023': 9, '2024': 13, '2025': 16, '2026': 82}
+  RS>=30pp             n= 131 win= 21% exp=  13.0% med=  -8.7% PF= 2.75 hold=  16d years={'2016': 12, '2019': 4, '2020': 5, '2021': 4, '2022': 33, '2023': 4, '2024': 7, '2025': 11, '2026': 51}
+
+IN-BEAR ONLY: 7% stop / 20% trail / exit when regime turns non-hostile
+  CONTROL any stock    n=11858 win= 41% exp=  -0.6% med=  -0.9% PF= 0.78 hold=   5d years={'2016': 1366, '2018': 1242, '2019': 1458, '2020': 441, '2022': 2267, '2023': 523, '2025': 2386, '2026': 2175}
+  CONTROL plain 52wk   n= 318 win= 43% exp=  -1.1% med=  -0.9% PF= 0.66 hold=   3d years={'2016': 39, '2018': 2, '2019': 31, '2020': 9, '2021': 6, '2022': 60, '2023': 18, '2024': 19, '2025': 23, '2026': 111}
+  RS>=10pp             n= 308 win= 43% exp=  -1.1% med=  -1.2% PF= 0.66 hold=   3d years={'2016': 38, '2018': 1, '2019': 27, '2020': 9, '2021': 6, '2022': 58, '2023': 18, '2024': 18, '2025': 23, '2026': 110}
+  RS>=20pp             n= 237 win= 41% exp=  -1.3% med=  -1.5% PF= 0.64 hold=   3d years={'2016': 28, '2018': 1, '2019': 15, '2020': 6, '2021': 6, '2022': 50, '2023': 12, '2024': 13, '2025': 19, '2026': 87}
+  RS>=30pp             n= 138 win= 44% exp=  -1.1% med=  -1.5% PF= 0.72 hold=   3d years={'2016': 14, '2019': 4, '2020': 5, '2021': 4, '2022': 33, '2023': 5, '2024': 7, '2025': 12, '2026': 54}
+
+Portfolio impact:
+NIFTY50          5slots  without: CAGR 18.7% DD -40.9%  | with RS-bear: CAGR 19.9% DD -42.6% (31 bear trades)
+NIFTY50          10slots  without: CAGR 27.2% DD -35.4%  | with RS-bear: CAGR 19.3% DD -45.2% (60 bear trades)
+BLEND_MID_SMALL  5slots  without: CAGR 22.2% DD -44.5%  | with RS-bear: CAGR 10.6% DD -32.3% (18 bear trades)
+BLEND_MID_SMALL  10slots  without: CAGR 22.7% DD -36.7%  | with RS-bear: CAGR 14.2% DD -51.1% (69 bear trades)
