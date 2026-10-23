@@ -1390,6 +1390,15 @@ def send_daily_cycle_summary() -> None:
             "  (QC was not the blocker \u2014 nothing reached it.)"
         )
 
+    # Buy-and-hold index benchmark: is the book beating a passive index fund?
+    try:
+        from benchmark.index_benchmark import compute_benchmark, format_benchmark_block
+        bench_block = format_benchmark_block(compute_benchmark(_current_mode()))
+        if bench_block:
+            blocks.append(bench_block)
+    except Exception as e:
+        log.warning(f"Benchmark block skipped: {e}")
+
     signal_block = "\n\n".join(blocks)
 
     # A missing live price is a system fault (usually an expired Kite login),
