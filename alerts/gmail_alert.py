@@ -1140,6 +1140,24 @@ def is_regime_skip_day(rows: list) -> bool:
     return bool(rows) and all((r.get("verdict") or "") == "REGIME_SKIP" for r in rows)
 
 
+def is_halt_day(rows: list) -> bool:
+    """True when every logged row is HALTED: the cycles ran, a hard circuit
+    breaker (weekly loss / drawdown) stopped each one before research."""
+    return bool(rows) and all((r.get("verdict") or "") == "HALTED" for r in rows)
+
+
+def _halt_note(halted_rows: list) -> str:
+    latest = max(halted_rows, key=lambda r: r.get("cycle_at") or "")
+    reason = (latest.get("rationale") or "hard circuit breaker").strip()
+    n = _distinct_cycles(halted_rows)
+    return (
+        f"\u26d4 TRADING HALTED BY CIRCUIT BREAKER for {n} cycle(s)\n"
+        f"  {reason}\n"
+        "No research ran in those cycles because the risk gate stopped them -\n"
+        "this is the breaker working as designed, not a system fault.\n"
+    )
+
+
 def assess_cycle_health(cycle_rows: list, auth_failures: int, auth_reason: str = "") -> tuple:
     """
     Decide whether today's cycles actually RAN. Returns (block_or_None, degraded).
@@ -1150,16 +1168,24 @@ def assess_cycle_health(cycle_rows: list, auth_failures: int, auth_reason: str =
     Counts matter: a preflight auth failure at 09:15 followed by a login and six
     healthy cycles is NOT "no research ran" (2026-10-01).
     """
+    # Cycles stopped by a hard breaker are explained, then set aside so they
+    # are neither "errors" nor mistaken for an empty (dead) log.
+    halted_rows = [r for r in cycle_rows if (r.get("verdict") or "") == "HALTED"]
+    halt_note = _halt_note(halted_rows) if halted_rows else ""
+    all_rows = cycle_rows
+    cycle_rows = [r for r in cycle_rows if (r.get("verdict") or "") != "HALTED"]
+
     verdicts = [(r.get("verdict") or "") for r in cycle_rows]
     errors = [r for r in cycle_rows if (r.get("verdict") or "") == "ERROR"]
     auth_errors = [r for r in errors
                    if any(m in (r.get("rationale") or "").lower() for m in _AUTH_MARKERS)]
     total = len(verdicts)
-    ran = _distinct_cycles(cycle_rows)
+    ran = _distinct_cycles(all_rows)
 
     if auth_errors:
         detail = auth_reason or (auth_errors[0].get("rationale") or "")[:200]
         return (
+            halt_note +
             "\U0001f6a8 KITE LOGIN INVALID - RESEARCH WAS IMPAIRED\n"
             f"{auth_failures} cycle(s) were skipped at the pre-cycle auth check and "
             f"{len(auth_errors)} ticker fetch(es) were rejected.\n"
@@ -1188,6 +1214,8 @@ def assess_cycle_health(cycle_rows: list, auth_failures: int, auth_reason: str =
             f"pre-cycle auth check). {ran} cycle(s) ran after the login was restored.\n"
         )
 
+    recovered_note = halt_note + recovered_note
+
     if total and len(errors) / total >= ERROR_SHARE_DEGRADED:
         return (
             recovered_note
@@ -1196,13 +1224,15 @@ def assess_cycle_health(cycle_rows: list, auth_failures: int, auth_reason: str =
             f"  {(errors[0].get('rationale') or '')[:200]}",
             True,
         )
+    if total == 0 and halted_rows:
+        return recovered_note.rstrip("\n"), False
     if total == 0:
         return (
             "\u26a0 NO CYCLE EVALUATIONS WERE RECORDED TODAY\n"
             "Nothing was logged, so this summary cannot confirm the research ran.\n"
             "Cycles that skip for a regime with no long baskets are logged as\n"
-            "REGIME_SKIP, so an empty log means no cycle completed - check the\n"
-            "status link below.",
+            "REGIME_SKIP and cycles stopped by a circuit breaker as HALTED, so an\n"
+            "empty log means no cycle completed - check the status link below.",
             True,
         )
     if is_regime_skip_day(cycle_rows):
@@ -1353,7 +1383,8 @@ def send_daily_cycle_summary() -> None:
     # Skip it on a degraded day and on a regime-skip day - those have their own
     # explanation in the health block.
     if (not (qc_errored or qc_blocked or dropped or alerted)
-            and not health_degraded and not is_regime_skip_day(health_rows)):
+            and not health_degraded and not is_regime_skip_day(health_rows)
+            and not is_halt_day(health_rows)):
         blocks.append(
             f"No candidate cleared the {MIN_CONFIDENCE:.0f}% confidence threshold today.\n"
             "  (QC was not the blocker \u2014 nothing reached it.)"
@@ -1378,7 +1409,9 @@ def send_daily_cycle_summary() -> None:
 
     send_plain_email(
         subject=(
-            ("\U0001f6a8 SYSTEM DEGRADED - " if health_degraded else "\U0001f4ca ")
+            ("\U0001f6a8 SYSTEM DEGRADED - " if health_degraded
+             else "\u26d4 TRADING HALTED - " if is_halt_day(health_rows)
+             else "\U0001f4ca ")
             + f"Daily summary \u2014 {len(signals_today)} signal{'s' if len(signals_today) != 1 else ''} today"
         ),
         body=body,

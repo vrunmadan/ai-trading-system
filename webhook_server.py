@@ -835,6 +835,7 @@ def cycle_history():
             "TRADE": "#22c55e", "PASS": "#6b7280",
             "NO_TOKEN": "#ef4444", "ERROR": "#ef4444",
             "REGIME_SKIP": "#6b7280",
+            "HALTED": "#f59e0b",
         }
 
         def _vcolor(v):

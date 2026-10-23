@@ -149,6 +149,34 @@ def _regime_return_peak_reset(mode: str, regime_reading, portfolio_value: float)
     return False
 
 
+def _log_halted_cycle(portfolio_status, regime_reading=None) -> None:
+    """Leave one HALTED cycle_log row for a cycle stopped by a hard breaker.
+
+    Without it a halted day leaves an empty cycle log, and the daily summary
+    reports "SYSTEM DEGRADED - no cycle evaluations" for a system that is
+    halting exactly as designed (2026-10-22/23, weekly-loss breaker).
+    Must never break a cycle.
+    """
+    try:
+        from ledger.db import log_cycle_evaluation, now_ist
+        regime = "unknown"
+        conf = 0.0
+        if regime_reading is not None:
+            regime = getattr(getattr(regime_reading, "regime", None), "value", None) or "unknown"
+            conf = float(getattr(regime_reading, "confidence", 0.0) or 0.0)
+        kind = getattr(portfolio_status, "halt_kind", "") or "HARD"
+        log_cycle_evaluation(
+            cycle_at=now_ist(),
+            regime=regime,
+            regime_confidence=conf,
+            ticker="(all)", exchange="-", strategy=f"halt:{kind}",
+            verdict="HALTED",
+            rationale=portfolio_status.halt_reason,
+        )
+    except Exception as e:
+        log.warning(f"Could not log HALTED row: {e}")
+
+
 def run_cycle() -> None:
     """
     One research cycle: classify regime → find signal → size → QC → alert.
@@ -215,6 +243,7 @@ def run_cycle() -> None:
                     log.error(f"Regime check while drawdown-halted failed: {e}", exc_info=True)
             if not portfolio_status.approved:
                 log.warning(f"Cycle halted by HARD circuit breaker: {portfolio_status.halt_reason}")
+                _log_halted_cycle(portfolio_status, regime_reading)
                 return
     except Exception as e:
         log.error(f"Portfolio risk check failed: {e}", exc_info=True)

@@ -237,9 +237,39 @@ def check_portfolio_risk(
         # halt email now fires only for a genuine losing-streak stop — not for
         # exposure/sector/position advisories that used to email every cycle.
         log.warning(f"Portfolio risk gate: HALTED — {halt_reason}")
-        _send_halt_alert(status)
+        _maybe_send_halt_alert(status, mode)
 
     return status
+
+
+def _maybe_send_halt_alert(status: PortfolioRiskStatus, mode: str) -> None:
+    """Send the halt email at most once per day per book per breaker kind.
+
+    The gate runs every cycle, so an unconditional send repeated the identical
+    email seven times a day for as long as the halt lasted (2026-10-22/23).
+    A change of breaker kind (weekly loss -> drawdown) sends again the same
+    day. If the dedupe store can't be read, send anyway: a missed halt alert
+    is worse than a duplicate.
+    """
+    from datetime import datetime
+    import pytz
+    today = datetime.now(pytz.timezone("Asia/Kolkata")).strftime("%Y-%m-%d")
+    key = f"halt_alert_last:{mode}"
+    marker = f"{today}|{status.halt_kind}"
+    try:
+        from ledger.db import kv_get
+        prev = kv_get(key)
+        if prev and prev[0] == marker:
+            log.info("Halt alert already sent today for this breaker — not resending.")
+            return
+    except Exception:
+        pass
+    _send_halt_alert(status)
+    try:
+        from ledger.db import kv_set
+        kv_set(key, marker)
+    except Exception as e:
+        log.warning(f"Could not record halt-alert dedupe marker: {e}")
 
 
 def _send_halt_alert(status: PortfolioRiskStatus) -> None:
@@ -256,6 +286,12 @@ def _send_halt_alert(status: PortfolioRiskStatus) -> None:
             f"Deployed: {status.deployed_pct:.1f}%  |  "
             f"Positions: {status.open_position_count}  |  "
             f"Week P&L: ₹{status.weekly_pnl:,.0f}"
+        )
+        if status.halt_kind == "WEEKLY_LOSS":
+            msg += "\n\nResets automatically at the start of next week (Monday 00:00 IST)."
+        msg += (
+            "\n\nThis is sent once a day while the halt lasts. Halted cycles are"
+            "\nlogged as HALTED and reported in the daily summary."
         )
         send_plain_email(subject="🚨 Trading halted — circuit breaker tripped", body=msg)
     except Exception as e:
